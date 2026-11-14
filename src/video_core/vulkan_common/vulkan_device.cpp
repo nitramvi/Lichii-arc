@@ -555,6 +555,25 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     if (!is_suitable)
         LOG_WARNING(Render_Vulkan, "Unsuitable driver - continuing anyways");
 
+    // lichii-arc diagnostic: whether the driver could build shaders as graphics pipeline libraries
+    // (compile each stage once, link per state quickly), the precache approach of Lichii PR #579.
+    if (supported_extensions.contains(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME)) {
+        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT gpl_props{};
+        gpl_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT;
+        VkPhysicalDeviceProperties2 gpl_props2{};
+        gpl_props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        gpl_props2.pNext = &gpl_props;
+        physical.GetProperties2(gpl_props2);
+        LOG_INFO(Render_Vulkan,
+                 "Graphics pipeline library: supported, fast linking {}, independent "
+                 "interpolation decoration {}, max bound descriptor sets {}",
+                 gpl_props.graphicsPipelineLibraryFastLinking != VK_FALSE,
+                 gpl_props.graphicsPipelineLibraryIndependentInterpolationDecoration != VK_FALSE,
+                 gpl_props2.properties.limits.maxBoundDescriptorSets);
+    } else {
+        LOG_INFO(Render_Vulkan, "Graphics pipeline library: not supported");
+    }
+
     if (is_nvidia) {
         nvidia_arch = GetNvidiaArchitecture(physical, supported_extensions);
     }
