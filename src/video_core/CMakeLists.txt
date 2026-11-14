@@ -307,6 +307,8 @@ add_library(video_core STATIC
 
     shader_cache.cpp
     shader_cache.h
+    spirv_inline_control.cpp
+    spirv_inline_control.h
     shader_cache_v2/cache.cpp
     shader_cache_v2/cache.h
     shader_cache_v2/cache_file.cpp
