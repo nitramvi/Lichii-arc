@@ -292,6 +292,13 @@ private:
     /// (native_async_draws = Bounded). Only touched on the GPU thread; reset in TickFrame.
     s64 native_wait_budget_us{8000};
     s64 native_wait_used_us{}; ///< Budget spent since the last 10 s log line.
+    /// Intel Arc: cap for native draws the heuristic keeps (no depth, <= 6 vertices, usually
+    /// full-screen passes). On Intel's Windows driver a Switch 2 pipeline can take seconds to
+    /// build; waiting on it unbounded froze Ocarina of Time for up to 20 s. Reset in TickFrame.
+    s64 native_hard_wait_budget_us{};
+    s64 native_hard_wait_cap_us{}; ///< 0 = unbounded (upstream behaviour)
+    s64 native_hard_wait_used_us{};
+    u64 native_hard_wait_skips{};
     std::deque<std::pair<u64, std::unique_ptr<GraphicsPipeline>>> evicted_pipelines; ///< (tick, pipeline)
     std::unordered_set<u64> used_and_evicted; ///< Key hashes of pipelines used this session, evicted since
     std::unordered_set<u64> evicted_hashes;   ///< Key hashes of evicted pipelines not created again

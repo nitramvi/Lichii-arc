@@ -768,6 +768,22 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
 
     LOG_INFO(Render_Vulkan, "DynamicState setting value: {}", u32(Settings::values.dyna_state.GetValue()));
 
+    // Intel Arc (lichii-arc): cap the wait of native draws the async heuristic keeps.
+    // LICHII_NATIVE_HARD_WAIT_MS overrides it on any GPU (0 = unbounded, the upstream behaviour).
+    {
+        s64 cap_ms = driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS ? 50 : 0;
+        if (const char* value = std::getenv("LICHII_NATIVE_HARD_WAIT_MS")) {
+            cap_ms = std::max<s64>(0, std::strtoll(value, nullptr, 10));
+        }
+        native_hard_wait_cap_us = cap_ms * 1000;
+        native_hard_wait_budget_us = native_hard_wait_cap_us;
+        if (cap_ms > 0) {
+            LOG_INFO(Render_Vulkan,
+                     "Native draws kept by the async heuristic wait at most {} ms per frame",
+                     cap_ms);
+        }
+    }
+
     dynamic_features = {};
     // Keys without the driver, so that a driver update keeps the recorded pipelines
     dynamic_features.driver_id = 0;
@@ -2270,6 +2286,7 @@ void PipelineCache::TickFrame() {
     ++frame_count;
     native_wait_budget_us =
         static_cast<s64>(Settings::values.native_pipeline_wait_ms.GetValue()) * 1000;
+    native_hard_wait_budget_us = native_hard_wait_cap_us;
     while (!evicted_pipelines.empty() && scheduler.IsFree(evicted_pipelines.front().first)) {
         evicted_pipelines.pop_front();
     }
@@ -2426,6 +2443,34 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
         switch (DecideNativePending(mode, can_discard, native_wait_budget_us)) {
         case NativeDrawAction::Wait:
             discard = false;
+            // Intel Arc: a draw the heuristic keeps still waits, but only up to a per-frame cap,
+            // like yuzu never blocking a frame for seconds. Wait mode keeps upstream behaviour.
+            if (mode != NativePendingMode::Wait && native_hard_wait_cap_us > 0) {
+                const auto begin = std::chrono::steady_clock::now();
+                const bool built = native_hard_wait_budget_us > 0 &&
+                                   pipeline->WaitBuilt(
+                                       std::chrono::microseconds{native_hard_wait_budget_us});
+                const auto spent = std::chrono::duration_cast<std::chrono::microseconds>(
+                                       std::chrono::steady_clock::now() - begin)
+                                       .count();
+                native_hard_wait_budget_us -= spent;
+                native_hard_wait_used_us += spent;
+                if (!built) {
+                    discard = true;
+                    ++native_hard_wait_skips;
+                }
+                static auto hard_window = std::chrono::steady_clock::now();
+                if (std::chrono::steady_clock::now() - hard_window > std::chrono::seconds{10}) {
+                    LOG_INFO(Render_Vulkan,
+                             "Intel capped wait: {:.1f} ms waited, {} kept draws skipped in the "
+                             "last 10 s (cap {} ms per frame)",
+                             static_cast<double>(native_hard_wait_used_us) / 1000.0,
+                             native_hard_wait_skips, native_hard_wait_cap_us / 1000);
+                    native_hard_wait_used_us = 0;
+                    native_hard_wait_skips = 0;
+                    hard_window = std::chrono::steady_clock::now();
+                }
+            }
             break;
         case NativeDrawAction::Skip:
             discard = true;
