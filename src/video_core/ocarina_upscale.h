@@ -17,7 +17,8 @@ constexpr OcarinaUpscaleBackend SelectOcarinaUpscaler(bool fsr_enabled, bool dls
     if (override == "native") {
         return OcarinaUpscaleBackend::Native;
     }
-    if (override == "fsr") {
+    // lichii-arc: XeSS runs on the FSR path (vk_xess_upscaler.h), with FSR 3.1 as its fallback.
+    if (override == "fsr" || override == "xess") {
         return OcarinaUpscaleBackend::Fsr;
     }
     if ((dlss_enabled || override == "dlss") && dlss_available) {

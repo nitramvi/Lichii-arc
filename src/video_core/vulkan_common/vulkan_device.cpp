@@ -31,6 +31,7 @@
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
 #include "video_core/vulkan_common/vma.h"
+#include "video_core/vulkan_common/xess_runtime.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
@@ -954,7 +955,33 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         }
     }
 #endif
-    logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions), first_next, dld);
+    // lichii-arc: Intel XeSS's device extensions and features, only when it was asked for. If the
+    // device can't be created with them it is created as before, without XeSS.
+    const auto extensions_before_xess = loaded_extensions;
+    const void* const next_before_xess = first_next;
+    const bool xess = XessRuntime::Wanted() &&
+                      XessRuntime::AddDeviceRequirements(
+                          instance, static_cast<VkPhysicalDevice>(physical),
+                          [&](const std::string& name) {
+                              return supported_extensions.contains(name);
+                          },
+                          loaded_extensions, first_next);
+    try {
+        logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions),
+                                     first_next, dld);
+    } catch (const vk::Exception& error) {
+        if (!xess) {
+            throw;
+        }
+        LOG_WARNING(Render_Vulkan, "XeSS: device creation with its requirements failed ({}); "
+                                   "creating it without XeSS",
+                    error.what());
+        XessRuntime::DropDeviceRequirements();
+        loaded_extensions = extensions_before_xess;
+        first_next = next_before_xess;
+        logical = vk::Device::Create(physical, queue_cis, ExtensionListForVulkan(loaded_extensions),
+                                     first_next, dld);
+    }
 
     graphics_queue = logical.GetQueue(graphics_family);
     present_queue = logical.GetQueue(present_family);

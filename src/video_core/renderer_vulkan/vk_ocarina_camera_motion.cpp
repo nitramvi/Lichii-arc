@@ -14,6 +14,7 @@
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_fsr3_upscaler.h"
 #include "video_core/renderer_vulkan/vk_fsr4_upscaler.h"
+#include "video_core/renderer_vulkan/vk_xess_upscaler.h"
 #include "video_core/host_shaders/ocarina_dlss_color_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_output_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_4k_composite_comp_spv.h"
@@ -724,6 +725,15 @@ struct OcarinaUpscaler::Impl {
             return;
         }
 #endif
+        // lichii-arc: Intel XeSS when it was asked for and its runtime started.
+        if (XessUpscaler::IsWanted()) {
+            try {
+                xess = std::make_unique<XessUpscaler>(device, scheduler, allocator);
+            } catch (const vk::Exception& error) {
+                LOG_WARNING(Render_Vulkan, "Ocarina XeSS unavailable ({}); using FSR 3.1",
+                            error.what());
+            }
+        }
         // FSR 4 when it's turned on and AMD's runtime offers it; FSR 3.1 stays the fallback (it
         // takes over if FSR 4 fails to create or dispatch).
         if (Fsr4Upscaler::IsWanted(device)) {
@@ -751,11 +761,17 @@ struct OcarinaUpscaler::Impl {
 #endif
     std::unique_ptr<Fsr3Upscaler> fsr;
     std::unique_ptr<Fsr4Upscaler> fsr4;
+    std::unique_ptr<XessUpscaler> xess;
+    bool output_xess{};
     /// The last recorded frame's output is FSR 4's. Kept per frame: a dispatch failure found on
     /// the worker thread must not switch that frame's writeback and 4K composite to FSR 3.1,
     /// which didn't evaluate it.
     bool output_fsr4{};
     std::optional<std::chrono::steady_clock::time_point> last_evaluation;
+
+    bool UsesXess() const {
+        return xess && !xess->Failed();
+    }
 
     bool UsesFsr4() const {
         return fsr4 && !fsr4->Failed();
@@ -778,6 +794,7 @@ struct OcarinaUpscaler::Impl {
 #ifdef EGLANTINE_STREAMLINE
         if (dlss) return dlss->OutputView();
 #endif
+        if (output_xess) return xess->OutputView();
         if (output_fsr4) return fsr4->OutputView();
         return fsr->OutputView();
     }
@@ -932,7 +949,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
                             VkExtent2D output_extent, VkExtent2D target_extent,
                             const Matrix& current, const Matrix& previous,
                             const OcarinaActorMesh& mesh, VkImage depth_image, u64 frame,
-                            std::array<f32, 2> jitter, [[maybe_unused]] VkExtent2D depth_extent) {
+                            std::array<f32, 2> jitter, VkExtent2D depth_extent) {
     auto& state = *impl;
     if (state.last_frame == frame || state.Failed()) {
         return false;
@@ -1023,8 +1040,41 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
         return false;
     }
 #endif
+    bool used_xess = false;
+    if (state.UsesXess()) {
+        const auto driver = state.device.GetDriverID();
+        const bool truncated_edges = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                                     driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                                     driver == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
+        const VkExtent2D depth_size =
+            depth_extent.width != 0 && depth_extent.height != 0 ? depth_extent : extent;
+        used_xess = state.xess->Upscale({
+            .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,
+                      VK_IMAGE_ASPECT_COLOR_BIT, extent},
+            .depth = {depth, depth_image, VK_FORMAT_D32_SFLOAT, DEPTH_RANGE,
+                      VK_IMAGE_ASPECT_DEPTH_BIT, depth_size},
+            .motion_vectors = {*resources.motion_view, *resources.motion, MOTION_FORMAT,
+                               COLOR_RANGE, VK_IMAGE_ASPECT_COLOR_BIT, extent},
+            .render_size = extent,
+            .upscale_size = output_extent,
+            .reset = reset || state.output_fsr4 || !state.output_xess,
+            .jitter = jitter,
+            .jitter_center = truncated_edges ? 0.5f : 0.0f,
+        });
+        if (used_xess) {
+            state.last_evaluation = std::chrono::steady_clock::now();
+            static const bool trace = std::getenv("EDEN_NX2_DLSS_CONTRACT_TRACE") != nullptr;
+            if (trace || frame % 120 == 0 || reset) {
+                LOG_INFO(Render_Vulkan,
+                         "Ocarina XeSS evaluated frame={} {}x{} -> {}x{} reset={} "
+                         "jitter=({:.3f},{:.3f})",
+                         frame, extent.width, extent.height, output_extent.width,
+                         output_extent.height, reset, jitter[0], jitter[1]);
+            }
+        }
+    }
     bool used_fsr4 = false;
-    if (state.UsesFsr4()) {
+    if (state.UsesFsr4() && !used_xess) {
         const auto now = std::chrono::steady_clock::now();
         const f32 elapsed = state.last_evaluation
             ? std::chrono::duration<f32, std::milli>(now - *state.last_evaluation).count() : 16.67f;
@@ -1059,14 +1109,14 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             }
         }
     }
-    if (state.fsr && !used_fsr4) {
+    if (state.fsr && !used_fsr4 && !used_xess) {
         const auto now = std::chrono::steady_clock::now();
         const f32 elapsed = state.last_evaluation
             ? std::chrono::duration<f32, std::milli>(now - *state.last_evaluation).count() : 16.67f;
         const f32 sharpness = FSR::RcasSharpnessFromStops(
             static_cast<f32>(Settings::values.fsr_sharpening_slider.GetValue()) / 100.0f);
         // Taking over from FSR 4: FSR 3.1 has no history of the frames FSR 4 drew.
-        const bool fsr_reset = reset || elapsed > 250.0f || state.output_fsr4;
+        const bool fsr_reset = reset || elapsed > 250.0f || state.output_fsr4 || state.output_xess;
         state.fsr->Upscale({
             .color = *resources.color_view,
             .depth = depth,
@@ -1094,6 +1144,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
         }
     }
     state.output_fsr4 = used_fsr4;
+    state.output_xess = used_xess;
     // A resize can submit the inputs before recording evaluation, so keep the later tick.
     resources.tick = state.scheduler.CurrentTick();
     if (target) {
