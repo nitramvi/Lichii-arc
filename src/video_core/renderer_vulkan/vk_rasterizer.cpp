@@ -20,6 +20,7 @@
 #include <fstream>
 #include <mutex>
 #include <string_view>
+#include <string>
 #include <vector>
 
 #include <fmt/format.h>
@@ -3504,7 +3505,14 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
                             upscale_hash == ComputePipeline::Ocarina1440pScaledShader ||
                             upscale_hash == ComputePipeline::Ocarina1440pScaledFieldShader ||
                             three_quarter_1440p;
-    const bool upscale_4k = pass_1440p && !native_resolution;
+    // lichii-arc: LICHII_OOT_FSR_1440=1 writes the reconstruction into the game's own 2560x1440
+    // target, as the game's pass does, instead of a separate 3840x2160 image (a 2.25x larger
+    // reconstruction a 1920x1200 handheld screen can't show).
+    static const bool fsr_1440 = [] {
+        const char* value = std::getenv("LICHII_OOT_FSR_1440");
+        return value && value[0] == '1';
+    }();
+    const bool upscale_4k = pass_1440p && !native_resolution && !fsr_1440;
     // The 1440p pass takes any 16:9 scene up to 2560x1440: the DLSS render scales shrink it.
     const bool valid_extents =
         pass_1440p ? extent.width <= 2560 && extent.height <= 1440 &&
@@ -3521,6 +3529,29 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
         color.format != PixelFormat::E5B9G9R9_FLOAT || target.format != PixelFormat::B10G11R11_FLOAT ||
         !oot_motion.SceneSized(color.size.width, color.size.height) ||
         color.ImageHandle() == target.ImageHandle() || depth.ImageHandle() == target.ImageHandle()) {
+        // lichii-arc: name the check that failed, so the replacement can be fixed on this GPU
+        // (logged when the details change).
+        static std::string last_detail;
+        const std::string detail = fmt::format(
+            "valid_extents={} scene={}x{} image={}x{} target={}x{} fmt={} rescaled={} color={}x{} "
+            "fmt={} rescaled={} scene_sized={} color_backing={} target_backing={} "
+            "color_samples={} target_samples={} color_range_full={} target_range_full={} "
+            "same_color={} same_depth={} hash={:016x}",
+            valid_extents, extent.width, extent.height, oot_motion.image_extent.width,
+            oot_motion.image_extent.height, target.size.width, target.size.height,
+            static_cast<int>(target.format), target.IsRescaled(), color.size.width,
+            color.size.height, static_cast<int>(color.format), color.IsRescaled(),
+            oot_motion.SceneSized(color.size.width, color.size.height),
+            color.BackingImage() != nullptr, target.BackingImage() != nullptr,
+            static_cast<int>(color.Samples()), static_cast<int>(target.Samples()),
+            color.range == VideoCommon::SubresourceRange{},
+            target.range == VideoCommon::SubresourceRange{},
+            color.ImageHandle() == target.ImageHandle(),
+            depth.ImageHandle() == target.ImageHandle(), upscale_hash);
+        if (detail != last_detail) {
+            last_detail = detail;
+            LOG_INFO(Render_Vulkan, "Ocarina temporal: unexpected upscale images: {}", detail);
+        }
         return fail("unexpected upscale images");
     }
 
