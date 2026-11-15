@@ -3658,13 +3658,21 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, bool r
         const char* value = std::getenv("LICHII_OOT_FSR_1440");
         return value && value[0] == '1';
     }();
-    const bool upscale_4k = pass_1440p && !native_resolution && !fsr_1440;
+    // lichii-arc: in handheld the same pass writes a 1920x1080 target (from a 960x540 scene at
+    // the Ultra Performance scale); the 4K output only follows the docked 2560x1440 one.
+    const bool target_1440p = target.size.width == 2560 && target.size.height == 1440;
+    const bool upscale_4k = pass_1440p && !native_resolution && !fsr_1440 && target_1440p;
     // The 1440p pass takes any 16:9 scene up to 2560x1440: the DLSS render scales shrink it.
     const bool valid_extents =
         pass_1440p ? extent.width <= 2560 && extent.height <= 1440 &&
                          std::abs(static_cast<int>(extent.width * 9) -
                                   static_cast<int>(extent.height * 16)) <= 32 &&
-                         target.size.width == 2560 && target.size.height == 1440
+                         (target_1440p ||
+                          // lichii-arc: the handheld 16:9 target, no smaller than the scene
+                          (target.size.width <= 2560 && target.size.height <= 1440 &&
+                           target.size.width >= extent.width &&
+                           target.size.height >= extent.height &&
+                           target.size.width * 9 == target.size.height * 16))
         : native_size ? target.size.width == extent.width && target.size.height == extent.height
                       : target.size.width == extent.width * 4 / 3 &&
                             target.size.height == extent.height * 4 / 3;
