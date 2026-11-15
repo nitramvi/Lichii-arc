@@ -80,10 +80,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # lichii-arc: MSVC (warnings are not errors there); the MinGW PGO build stops on a
-          # -Werror=shadow in code this branch doesn't touch.
-          - platform: windows-x86_64
+          # lichii-arc: the MinGW PGO build, as Fritchii ships, with ENABLE_WERROR off (Fritchii's
+          # tree has warnings the CI flags turn into errors).
+          - platform: windows-x86_64-pgo
             runner: windows-2022
+            pgo: true
+            mingw: true
 
     steps:
       - name: Check out source
@@ -335,6 +337,7 @@ jobs:
             -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
           cmake -S . -B build/release -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_WERROR=OFF \
             -DBUILD_TESTING=OFF \
             -DYUZU_TESTS=OFF \
             -DYUZU_CMD=ON \
