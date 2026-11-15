@@ -1,0 +1,58 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 450
+
+// lichii-arc: an automatic responsive (reactive) mask for Ocarina's temporal upscalers. The motion
+// vectors cover the camera and Link only, so anything else that moves on its own (a thrown rock,
+// enemies, fast effects) is reprojected wrongly and its history smears into trails. A pixel whose
+// colour falls outside the neighbourhood of last frame's colour at its reprojected position
+// changed more than the camera explains: mark it so the upscaler trusts this frame there.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D current_color;
+layout(binding = 1) uniform sampler2D previous_color;
+layout(binding = 2) uniform sampler2D motion;
+layout(binding = 3) uniform sampler2D effects_bias;
+layout(binding = 4, r16f) uniform writeonly image2D mask;
+// bit 0: previous colour valid; bit 1: effects bias valid; bits 8..: threshold in 1/1000.
+layout(push_constant) uniform Controls { uint control; } controls;
+
+float Luma(vec3 color) {
+    return dot(clamp(color, vec3(0.0), vec3(1.0)), vec3(0.299, 0.587, 0.114));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(mask);
+    if (any(greaterThanEqual(pixel, size))) {
+        return;
+    }
+    uint control = controls.control;
+    float threshold = max(float(control >> 8) / 1000.0, 0.001);
+    float value = 0.0;
+    if ((control & 1u) != 0u) {
+        ivec2 last = size - 1;
+        float current = Luma(texelFetch(current_color, pixel, 0).rgb);
+        vec2 history = vec2(pixel) + 0.5 + texelFetch(motion, pixel, 0).rg;
+        ivec2 center = ivec2(floor(history));
+        if (all(greaterThanEqual(center, ivec2(0))) && all(lessThanEqual(center, last))) {
+            // The 3x3 neighbourhood absorbs the jitter and thin-edge aliasing.
+            float low = 1.0;
+            float high = 0.0;
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    float l = Luma(texelFetch(previous_color,
+                                              clamp(center + ivec2(x, y), ivec2(0), last), 0).rgb);
+                    low = min(low, l);
+                    high = max(high, l);
+                }
+            }
+            float outside = max(low - current, current - high);
+            value = smoothstep(threshold, threshold * 2.5, outside);
+        }
+    }
+    if ((control & 2u) != 0u) {
+        value = max(value, texelFetch(effects_bias, pixel, 0).r);
+    }
+    imageStore(mask, pixel, vec4(value));
+}

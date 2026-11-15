@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
 
 #include "common/common_types.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -43,10 +44,16 @@ public:
         bool reset;
         std::array<f32, 2> jitter{}; ///< Offset the scene was drawn with, in render pixels.
         f32 jitter_center = 0.0f;    ///< Mean of the jitter sequence (0.5 for [0, 1) offsets).
+        /// lichii-arc: responsive pixel mask (R16F, render size, [0, 1]); required every frame
+        /// once the context was initialized with it (LICHII_OOT_AUTO_MASK=1).
+        std::optional<Image> responsive;
     };
 
     /// Whether XeSS was asked for and the device was created with its requirements.
     [[nodiscard]] static bool IsWanted();
+
+    /// lichii-arc: LICHII_OOT_AUTO_MASK=1 (the context then takes a responsive mask every frame).
+    [[nodiscard]] static bool ResponsiveMaskWanted();
 
     /// Throws vk::Exception when XeSS can't start: the runtime is missing or rejects the device.
     explicit XessUpscaler(const Device& device, Scheduler& scheduler,

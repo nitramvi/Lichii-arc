@@ -20,6 +20,7 @@
 #include "video_core/host_shaders/ocarina_dlss_4k_composite_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_4k_reference_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_bias_comp_spv.h"
+#include "video_core/host_shaders/ocarina_auto_mask_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_base_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_comp_spv.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
@@ -625,6 +626,30 @@ constexpr VkFormat EFFECTS_FORMAT = VK_FORMAT_R8_UNORM;
 // Streamline has no R8_UNORM: it rejects such a mask as "undefined format" and DLSS never sees it.
 constexpr VkFormat BIAS_FORMAT = VK_FORMAT_R16_SFLOAT;
 
+/// lichii-arc: LICHII_OOT_AUTO_MASK=1 builds an automatic responsive mask (ocarina_auto_mask.comp)
+/// for what moves on its own; LICHII_OOT_AUTO_MASK_THRESHOLD sets the luma step (default 0.08).
+bool AutoMaskWanted() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("LICHII_OOT_AUTO_MASK");
+        return value && value[0] == '1';
+    }();
+    return wanted;
+}
+
+u32 AutoMaskThousandths() {
+    static const u32 value = [] {
+        f32 threshold = 0.08f;
+        if (const char* text = std::getenv("LICHII_OOT_AUTO_MASK_THRESHOLD")) {
+            const f32 parsed = std::strtof(text, nullptr);
+            if (parsed > 0.0f && parsed < 1.0f) {
+                threshold = parsed;
+            }
+        }
+        return static_cast<u32>(threshold * 1000.0f);
+    }();
+    return value;
+}
+
 vk::Image CreateOcarinaImage(MemoryAllocator& allocator, VkExtent2D extent, VkFormat format,
                             VkImageUsageFlags usage) {
     return allocator.CreateImage(VkImageCreateInfo{
@@ -816,6 +841,14 @@ struct OcarinaUpscaler::Impl {
     std::unique_ptr<OcarinaEffectsPass<1>> effects_base_pass;
     std::unique_ptr<OcarinaEffectsPass<2>> effects_mark_pass;
     std::unique_ptr<OcarinaEffectsPass<3>> effects_bias_pass;
+    // lichii-arc: the automatic responsive mask and the slot holding the previous frame's colour.
+    std::unique_ptr<OcarinaEffectsPass<4>> auto_mask_pass;
+    vk::Image auto_mask;
+    vk::ImageView auto_mask_view;
+    VkExtent2D auto_mask_extent{};
+    bool auto_mask_failed{};
+    const OcarinaFrameSlot* previous_slot{};
+    std::optional<u64> previous_slot_frame;
 
     VkSampler LinearSampler() {
         if (!linear_sampler) {
@@ -961,6 +994,10 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     }
     state.scheduler.GetMasterSemaphore().Refresh();
     const auto slot = std::ranges::find_if(state.slots, [&](const auto& entry) {
+        // The automatic mask reads the previous frame's colour from its slot: keep that one.
+        if (entry && AutoMaskWanted() && entry.get() == state.previous_slot) {
+            return false;
+        }
         return !entry || state.scheduler.IsFree(entry->tick);
     });
     if (slot == state.slots.end()) {
@@ -1016,6 +1053,60 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
         bias_image = *effects.bias;
     }
 
+    // lichii-arc: the automatic responsive mask (LICHII_OOT_AUTO_MASK=1), combined with the
+    // effects bias. Without it (off, or its image couldn't be made) everything stays as before.
+    VkImageView mask_view{};
+    VkImage mask_image{};
+    if (AutoMaskWanted() && !state.auto_mask_failed) {
+        try {
+            if (!state.auto_mask_pass) {
+                state.auto_mask_pass = std::make_unique<OcarinaEffectsPass<4>>(
+                    state.device, state.scheduler, state.pool, OCARINA_AUTO_MASK_COMP_SPV);
+                LOG_INFO(Render_Vulkan, "Ocarina automatic responsive mask on (threshold {:.3f})",
+                         static_cast<f32>(AutoMaskThousandths()) / 1000.0f);
+            }
+            if (!state.auto_mask || state.auto_mask_extent.width != extent.width ||
+                state.auto_mask_extent.height != extent.height) {
+                if (state.auto_mask) {
+                    state.scheduler.Finish(); // the old mask may still be in use
+                }
+                state.auto_mask = CreateOcarinaImage(state.allocator, extent, BIAS_FORMAT,
+                                                     VK_IMAGE_USAGE_STORAGE_BIT |
+                                                         VK_IMAGE_USAGE_SAMPLED_BIT);
+                state.auto_mask_view = CreateOcarinaView(state.device, *state.auto_mask, BIAS_FORMAT);
+                state.auto_mask_extent = extent;
+            }
+        } catch (const vk::Exception& error) {
+            LOG_WARNING(Render_Vulkan, "Ocarina automatic mask unavailable ({}); continuing without",
+                        error.what());
+            state.auto_mask_failed = true;
+        }
+    }
+    if (AutoMaskWanted() && !state.auto_mask_failed && state.auto_mask_view) {
+        const bool has_previous = state.previous_slot && state.previous_slot_frame &&
+                                  *state.previous_slot_frame + 1 == frame &&
+                                  state.previous_slot != &resources &&
+                                  state.previous_slot->extent.width == extent.width &&
+                                  state.previous_slot->extent.height == extent.height;
+        const u32 control = (has_previous ? 1U : 0U) | (bias_view ? 2U : 0U) |
+                            (AutoMaskThousandths() << 8);
+        state.scheduler.RequestOutsideRenderPassOperationContext();
+        state.queue.Acquire(state.scheduler, 5);
+        state.queue.AddSampledImage(*resources.color_view, sampler);
+        state.queue.AddSampledImage(has_previous ? *state.previous_slot->color_view
+                                                 : *resources.color_view,
+                                    sampler);
+        state.queue.AddSampledImage(*resources.motion_view, sampler);
+        state.queue.AddSampledImage(bias_view ? bias_view : *resources.color_view, sampler);
+        state.queue.AddImage(*state.auto_mask_view);
+        state.auto_mask_pass->Record(state.scheduler, state.queue.UpdateData(), *state.auto_mask,
+                                     extent, control);
+        mask_view = *state.auto_mask_view;
+        mask_image = *state.auto_mask;
+    }
+    state.previous_slot = &resources;
+    state.previous_slot_frame = frame;
+
     const bool reset = !state.last_frame || frame != *state.last_frame + 1 ||
                        !std::ranges::equal(previous, state.last_view_projection,
                                            [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
@@ -1060,6 +1151,10 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             .reset = reset || state.output_fsr4 || !state.output_xess,
             .jitter = jitter,
             .jitter_center = truncated_edges ? 0.5f : 0.0f,
+            .responsive = mask_view ? std::optional<XessUpscaler::Image>{XessUpscaler::Image{
+                                          mask_view, mask_image, BIAS_FORMAT, COLOR_RANGE,
+                                          VK_IMAGE_ASPECT_COLOR_BIT, extent}}
+                                    : std::nullopt,
         });
         if (used_xess) {
             state.last_evaluation = std::chrono::steady_clock::now();
@@ -1129,7 +1224,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             .reset = fsr_reset,
             .sharpen = sharpness > 0.0f,
             .sharpness = sharpness,
-            .reactive_mask = bias_view,
+            .reactive_mask = mask_view ? mask_view : bias_view,
             .transparency_mask = bias_view,
             .vertical_fov = 2.0f * std::atan(1.0f / projection_y),
         });

@@ -113,6 +113,14 @@ std::array<f32, 2> ScaleFromEnv(const char* name) {
 }
 } // Anonymous namespace
 
+bool XessUpscaler::ResponsiveMaskWanted() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("LICHII_OOT_AUTO_MASK");
+        return value && value[0] == '1';
+    }();
+    return wanted;
+}
+
 bool XessUpscaler::IsWanted() {
     return XessRuntime::Wanted() && XessRuntime::DeviceReady();
 }
@@ -160,6 +168,10 @@ bool XessUpscaler::Init(VkExtent2D render_size, VkExtent2D upscale_size) {
     params.qualitySetting = quality;
     // Tonemapped colour, standard depth, render-size motion vectors in pixels.
     params.initFlags = XESS_INIT_FLAG_LDR_INPUT_COLOR;
+    // lichii-arc: the automatic responsive mask (vk_ocarina_camera_motion.cpp) comes every frame.
+    if (ResponsiveMaskWanted()) {
+        params.initFlags |= XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
+    }
     params.creationNodeMask = 1;
     params.visibleNodeMask = 1;
     params.tempBufferHeap = VK_NULL_HANDLE;
@@ -244,10 +256,18 @@ bool XessUpscaler::Upscale(const Inputs& in) {
         CreateOutput(in.upscale_size);
     }
 
+    // Initialized with the responsive-mask flag, XeSS needs the mask on every evaluation: a frame
+    // without one goes to FSR 3.1 (which then resets its history) instead.
+    if (ResponsiveMaskWanted() && !in.responsive) {
+        return false;
+    }
     xess_vk_execute_params_t params{};
     params.colorTexture = View(in.color);
     params.velocityTexture = View(in.motion_vectors);
     params.depthTexture = View(in.depth);
+    if (in.responsive) {
+        params.responsivePixelMaskTexture = View(*in.responsive);
+    }
     params.outputTexture = xess_vk_image_view_info{
         .imageView = *output_view,
         .image = *output_image,
@@ -271,7 +291,7 @@ bool XessUpscaler::Upscale(const Inputs& in) {
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
             VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
         // The inputs stay in GENERAL otherwise; XeSS reads them as sampled images.
-        boost::container::static_vector<VkImageMemoryBarrier, 4> to_read{
+        boost::container::static_vector<VkImageMemoryBarrier, 5> to_read{
             Barrier(in.color, WRITES, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
             Barrier(in.depth, WRITES, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
@@ -282,6 +302,11 @@ bool XessUpscaler::Upscale(const Inputs& in) {
                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL),
         };
+        if (in.responsive) {
+            to_read.push_back(Barrier(*in.responsive, WRITES, VK_ACCESS_SHADER_READ_BIT,
+                                      VK_IMAGE_LAYOUT_GENERAL,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+        }
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, {}, {}, to_read);
 
@@ -292,7 +317,7 @@ bool XessUpscaler::Upscale(const Inputs& in) {
                       static_cast<int>(result));
         }
 
-        boost::container::static_vector<VkImageMemoryBarrier, 4> back{
+        boost::container::static_vector<VkImageMemoryBarrier, 5> back{
             Barrier(in.color, VK_ACCESS_SHADER_READ_BIT, 0,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL),
             Barrier(in.depth, VK_ACCESS_SHADER_READ_BIT, 0,
@@ -302,6 +327,11 @@ bool XessUpscaler::Upscale(const Inputs& in) {
             Barrier(output, COLOR_RANGE, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL),
         };
+        if (in.responsive) {
+            back.push_back(Barrier(*in.responsive, VK_ACCESS_SHADER_READ_BIT, 0,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_GENERAL));
+        }
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, {}, {}, back);
     });
