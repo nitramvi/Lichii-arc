@@ -485,6 +485,7 @@ private:
 
     void TraceGpuSubmission();
     void ReportWorkTimes();
+    void ReportIdleGaps(const std::vector<u64>& begin, const std::vector<u64>& end);
     /// EDEN_DKB_FRAME_TRACE: before each recorded command, a marker that timestamps it in
     /// sampled submissions, so the frame's GPU time can be split by the code that recorded it.
     void RecordSiteMarker(std::source_location location);
@@ -535,7 +536,15 @@ private:
         u32 num_shaders{};
         u32 untracked_uses{};
         std::array<ShaderUse, 32> shaders{};
+        /// lichii-arc: where the submission was cut (Flush or Finish caller).
+        const char* site_file{};
+        u32 site_line{};
+        bool finish{};
     };
+    /// lichii-arc: the caller of the Flush/Finish being submitted, for the idle-gap report.
+    const char* submit_site_file{};
+    u32 submit_site_line{};
+    bool submit_finish{};
     SubmissionTrace trace_work;
     std::vector<SubmissionTrace> trace_submissions;
     static constexpr u32 TraceMaxWork = 4096;

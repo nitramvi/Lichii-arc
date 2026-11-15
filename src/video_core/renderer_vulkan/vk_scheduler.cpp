@@ -186,6 +186,9 @@ u64 Scheduler::Flush(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
         VideoCommon::GpuSplit::CheckOwner("Scheduler::Flush");
     }
     // When flushing, we only send data to the worker thread; no waiting is necessary.
+    submit_site_file = location.file_name();
+    submit_site_line = location.line();
+    submit_finish = false;
     const u64 signal_value = SubmitExecution(signal_semaphore, wait_semaphore);
     AllocateNewContext();
     submitted_serial = record_serial;
@@ -270,6 +273,9 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
     const u64 presubmit_tick = CurrentTick();
     const bool profile = VideoCommon::Nx2Profile::Enabled();
     const u64 start = profile ? VideoCommon::Nx2Profile::Now() : 0;
+    submit_site_file = location.file_name();
+    submit_site_line = location.line();
+    submit_finish = true;
     SubmitExecution(signal_semaphore, wait_semaphore);
     Wait(presubmit_tick);
     AllocateNewContext();
@@ -955,6 +961,15 @@ void Scheduler::TraceGpuSubmission() {
         }
         busy_ticks += busy_end - busy_start;
         const double busy_ms = static_cast<double>(busy_ticks) * trace_timestamp_period / 1e6;
+        if (Common::DkbFrameTrace::Enabled() && trace_gpu_skipped == 0) {
+            std::vector<u64> gap_begin(trace_gpu_count);
+            std::vector<u64> gap_end(trace_gpu_count);
+            for (u32 i = 0; i < trace_gpu_count; ++i) {
+                gap_begin[i] = results[i * 2].timestamp;
+                gap_end[i] = results[i * 2 + 1].timestamp;
+            }
+            ReportIdleGaps(gap_begin, gap_end);
+        }
         if (trace_gpu_publish && trace_gpu_skipped == 0) {
             std::scoped_lock lock{gpu_busy_mutex};
             gpu_busy = GpuBusySample{busy_ms, std::chrono::steady_clock::now()};
@@ -1025,6 +1040,89 @@ void Scheduler::TraceGpuSubmission() {
     trace_gpu_recording = true;
 }
 
+/// lichii-arc: the GPU's idle time inside a sampled frame, between its submissions: how many gaps,
+/// how long, and which Flush/Finish callers cut the submissions around the longest ones. Small
+/// even gaps point at per-submission cost; few long ones at work the GPU waited for.
+void Scheduler::ReportIdleGaps(const std::vector<u64>& begin, const std::vector<u64>& end) {
+    const size_t count = begin.size();
+    if (count < 2) {
+        return;
+    }
+    const auto ms = [this](u64 ticks) {
+        return static_cast<double>(ticks) * trace_timestamp_period / 1e6;
+    };
+    std::vector<u32> order(count);
+    for (u32 i = 0; i < count; ++i) {
+        order[i] = i;
+    }
+    const u64 base = begin[0];
+    const auto rel = [&](u64 timestamp) {
+        return Common::DkbFrameTrace::TimestampDelta(base, timestamp, trace_timestamp_bits);
+    };
+    std::ranges::sort(order, [&](u32 a, u32 b) { return rel(begin[a]) < rel(begin[b]); });
+    struct Gap {
+        double ms;
+        u32 before;
+        u32 after;
+    };
+    std::vector<Gap> gaps;
+    std::array<u32, 4> buckets{}; // < 0.1, < 0.5, < 2, >= 2 ms
+    double total{};
+    u64 covered = rel(end[order[0]]);
+    for (size_t k = 1; k < count; ++k) {
+        const u32 i = order[k];
+        const u64 start = rel(begin[i]);
+        if (start > covered) {
+            const double gap = ms(start - covered);
+            total += gap;
+            buckets[gap < 0.1 ? 0 : gap < 0.5 ? 1 : gap < 2.0 ? 2 : 3]++;
+            gaps.push_back({gap, order[k - 1], i});
+        }
+        covered = std::max(covered, rel(end[i]));
+    }
+    std::ranges::sort(gaps, [](const Gap& a, const Gap& b) { return a.ms > b.ms; });
+    const auto site = [this](u32 index) {
+        const auto& work = trace_submissions[index];
+        if (work.site_file == nullptr) {
+            return std::string{"?"};
+        }
+        std::string_view file{work.site_file};
+        if (const size_t slash = file.find_last_of("\\/"); slash != std::string_view::npos) {
+            file.remove_prefix(slash + 1);
+        }
+        return fmt::format("{}{}:{} d{}c{}", work.finish ? "finish " : "", file, work.site_line,
+                           work.draw_attempts, work.dispatch_attempts);
+    };
+    std::string top;
+    for (size_t g = 0; g < gaps.size() && g < 6; ++g) {
+        top += fmt::format(" | {:.2f}ms after [{}] before [{}]", gaps[g].ms, site(gaps[g].before),
+                           site(gaps[g].after));
+    }
+    std::map<std::string, std::pair<u32, double>> by_site;
+    for (const Gap& gap : gaps) {
+        std::string name = site(gap.after);
+        name.resize(name.rfind(' ') == std::string::npos ? name.size() : name.rfind(' '));
+        auto& entry = by_site[name];
+        entry.first++;
+        entry.second += gap.ms;
+    }
+    std::vector<std::pair<double, std::string>> sites;
+    for (const auto& [name, value] : by_site) {
+        sites.emplace_back(value.second, fmt::format("{} {}x {:.2f}ms", name, value.first,
+                                                     value.second));
+    }
+    std::ranges::sort(sites, std::greater<>{});
+    std::string next_sites;
+    for (size_t s = 0; s < sites.size() && s < 6; ++s) {
+        next_sites += fmt::format("{}{}", next_sites.empty() ? "" : ", ", sites[s].second);
+    }
+    LOG_INFO(Render_Vulkan,
+             "DKB gpu_gaps renderer_frame={} submissions={} gaps={} idle_ms={:.3f} "
+             "lt0.1={} lt0.5={} lt2={} ge2={} by_next_submission: {}{}",
+             trace_sample_frame, count, gaps.size(), total, buckets[0], buckets[1], buckets[2],
+             buckets[3], next_sites, top);
+}
+
 u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore) {
     if (uploads_pending) {
         // Keep the copies in the tick that protects their staging regions and buffer lifetimes.
@@ -1038,7 +1136,14 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
     InvalidateState();
 
     const u64 signal_value = master_semaphore->NextTick();
-    RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value,
+    const char* const site_file = submit_site_file;
+    const u32 site_line = submit_site_line;
+    const bool site_finish = submit_finish;
+    submit_site_file = nullptr;
+    submit_site_line = 0;
+    submit_finish = false;
+    RecordWithUploadBuffer([signal_semaphore, wait_semaphore, signal_value, site_file, site_line,
+                            site_finish,
                             this](vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf) {
         static constexpr VkMemoryBarrier WRITE_BARRIER{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
@@ -1053,6 +1158,9 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
                                  trace_gpu_count * 2 + 1);
             trace_gpu_tick = signal_value;
             trace_work.tick = signal_value;
+            trace_work.site_file = site_file;
+            trace_work.site_line = site_line;
+            trace_work.finish = site_finish;
             trace_submissions[trace_gpu_count] = trace_work;
             ++trace_gpu_count;
             trace_gpu_recording = false;
