@@ -3439,8 +3439,12 @@ void RasterizerVulkan::UpdateOcarinaJitter() {
                 // AMD's phase count for the last FSR frame's scale.
                 const u32 index = static_cast<u32>(render_trace_frame % oot_jitter_phases) + 1;
                 const auto driver = device.GetDriverID();
-                want = VideoCommon::OcarinaJitter(index, driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
-                                                             driver == VK_DRIVER_ID_AMD_OPEN_SOURCE);
+                // lichii-arc: Intel's Windows driver also drops the fraction of the right and
+                // bottom viewport edges (a bright band there under FSR on an Arc 140V).
+                want = VideoCommon::OcarinaJitter(
+                    index, driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                               driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                               driver == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS);
                 oot_jitter_frame = render_trace_frame;
                 oot_jitter_offset = want;
             }
