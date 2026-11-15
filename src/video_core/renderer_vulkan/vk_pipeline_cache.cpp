@@ -28,6 +28,7 @@
 #include <deque>
 #include <numeric>
 #include <streambuf>
+#include "common/settings.h"
 #include "common/cityhash.h"
 #include "common/polyfill_thread.h"
 #include "common/scm_rev.h"
@@ -671,6 +672,11 @@ bool DriverCachesPipelines(const Device& device) {
     case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
     case VK_DRIVER_ID_AMD_PROPRIETARY:
         return true;
+    case VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS:
+        // lichii-arc: Intel's Windows driver keeps its own on-disk shader cache too (pipelines
+        // rebuilt after clearing the emulator's caches come back in a few ms). Only with
+        // LICHII_OOT_PRECOMPILE=1, which prepares the recipe into it.
+        return Settings::LichiiOotPrecompile();
     default:
         return false;
     }

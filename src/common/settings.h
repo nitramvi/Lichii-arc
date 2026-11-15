@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <map>
 #include <memory>
@@ -1135,6 +1136,17 @@ void SetAstcRecompressionOverride(std::optional<AstcRecompression> recompression
 bool IsOpenGL();
 
 bool IsDockedMode();
+
+/// lichii-arc: LICHII_OOT_PRECOMPILE=1 prepares Ocarina's recipe on Intel too: Intel's Windows
+/// driver keeps the pipelines in its own cache and VK_EXT_vertex_input_dynamic_state stays on,
+/// as the recipe recorded it.
+inline bool LichiiOotPrecompile() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_OOT_PRECOMPILE");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
 
 float Volume();
 

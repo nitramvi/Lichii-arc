@@ -1521,7 +1521,14 @@ bool Device::GetSuitability(bool requires_swapchain) {
     // Disable VertexInputDynamicState on old Intel Windows drivers
     if (extensions.vertex_input_dynamic_state) {
         const u32 version = (properties.properties.driverVersion << 3) >> 3;
-        if ((driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && version < VK_MAKE_API_VERSION(27, 20, 100, 0))
+        // lichii-arc: Intel encodes driverVersion as (major << 14) | minor, so this check took
+        // every current Intel driver for an old one. LICHII_INTEL_VIDS=1 or LICHII_OOT_PRECOMPILE=1
+        // keeps the extension (tested on an Arc 140V, 101.9150).
+        const char* keep_vids = std::getenv("LICHII_INTEL_VIDS");
+        const bool intel_keep = (keep_vids != nullptr && keep_vids[0] == '1') ||
+                                Settings::LichiiOotPrecompile();
+        if ((driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && !intel_keep &&
+             version < VK_MAKE_API_VERSION(27, 20, 100, 0))
         || (driver_id == VK_DRIVER_ID_NVIDIA_PROPRIETARY && properties.properties.driverVersion < NvidiaDriverVersion(580, 119, 2))) {
             LOG_WARNING(Render_Vulkan, "Disabling broken VK_EXT_vertex_input_dynamic_state");
             RemoveExtensionFeature(extensions.vertex_input_dynamic_state, features.vertex_input_dynamic_state, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
