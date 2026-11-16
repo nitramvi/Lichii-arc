@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
 #include <algorithm>
 #include <thread>
 #include <utility>
@@ -67,7 +68,10 @@ WriterStats CacheWriter::Stats() const {
 
 void CacheWriter::Run(std::stop_token stop) {
     Common::SetCurrentThreadName("ShaderCacheWriter");
-    Common::SetCurrentThreadToSpeculativeWork();
+    // lichii-arc: placed only with LICHII_ECORE_COMPILE set; untouched otherwise, as before.
+    if (const char* ecore = std::getenv("LICHII_ECORE_COMPILE"); ecore && ecore[0] > '0') {
+        Common::SetCurrentThreadToSpeculativeWork();
+    }
     std::unique_lock lock{mutex};
     while (!stop.stop_requested()) {
         const auto now = Clock::now();
