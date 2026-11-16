@@ -321,7 +321,7 @@ void StagingBufferPool::ReleaseLevel(StagingBuffersCache& cache, size_t log2) {
     const size_t KeepPerLevel = tex_stream ? 4 : 2;
     if (&cache == &upload_cache && log2 <= KeepMaxLog2) {
         size_t idle = 0;
-        std::erase_if(entries, [this, &idle](const StagingBuffer& entry) {
+        std::erase_if(entries, [this, &idle, KeepPerLevel](const StagingBuffer& entry) {
             return scheduler.IsFree(entry.tick) && ++idle > KeepPerLevel;
         });
         staging.delete_index = 0;
