@@ -8,6 +8,7 @@
 #include <system_error>
 
 #include <fmt/format.h>
+#define XXH_INLINE_ALL
 #include <xxhash.h>
 
 #include "common/fs/file.h"
