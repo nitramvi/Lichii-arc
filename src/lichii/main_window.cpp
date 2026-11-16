@@ -1434,14 +1434,15 @@ void MainWindow::InitializeHotkeys() {
                 Qt::QueuedConnection);
     };
 
-    // lichii-arc: LICHII_DIAG=1 — F9 (anywhere in the application) logs a numbered mark and saves a
+    // lichii-arc: LICHII_DIAG=1 — F9 (anywhere in the application) or L3+R3 on player 1 logs a
+    // numbered mark and saves a
     // screenshot, so a glitch or a hitch can be found in the log by the moment it was seen.
     if (Common::LichiiDiag::Enabled() &&
         findChild<QShortcut*>(QStringLiteral("lichii_diag_mark")) == nullptr) {
         auto* mark = new QShortcut(QKeySequence(Qt::Key_F9), this);
         mark->setObjectName(QStringLiteral("lichii_diag_mark"));
         mark->setContext(Qt::ApplicationShortcut);
-        connect(mark, &QShortcut::activated, this, [this] {
+        const auto do_mark = [this] {
             const u32 number = Common::LichiiDiag::Mark();
             if (number == 0 || QtCommon::emu_thread == nullptr ||
                 !QtCommon::emu_thread->IsRunning()) {
@@ -1456,7 +1457,14 @@ void MainWindow::InitializeHotkeys() {
                 QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_hh-mm-ss-zzz"));
             render_window->CaptureScreenshot(
                 QStringLiteral("%1/lichii_mark_%2_%3.png").arg(directory).arg(number).arg(date));
-        });
+        };
+        connect(mark, &QShortcut::activated, this, do_mark);
+        // The same from the controller: both sticks pressed together (L3+R3).
+        auto* pad_mark = new ControllerShortcut(
+            QtCommon::system->HIDCore().GetEmulatedController(Core::HID::NpadIdType::Player1));
+        pad_mark->setParent(this);
+        pad_mark->SetKey(std::string{"Left_Stick+Right_Stick"});
+        connect(pad_mark, &ControllerShortcut::Activated, this, do_mark, Qt::QueuedConnection);
     }
 
     connect_shortcut(QStringLiteral("Exit Fullscreen"), [&] {
