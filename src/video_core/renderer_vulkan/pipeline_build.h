@@ -32,6 +32,17 @@ inline bool FastFirstBuildEnabled() {
     return enabled;
 }
 
+/// lichii-arc LICHII_TESS_FALLBACK=1: a tessellated graphics pipeline built while the game runs
+/// takes the fast first build (unoptimized monolithic first, optimized later) even without
+/// EDEN_NX2_FAST_FIRST and with graphics pipeline libraries on.
+inline bool TessFallbackEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_TESS_FALLBACK");
+        return value && *value == '1';
+    }();
+    return enabled;
+}
+
 /// EDEN_NX2_HEAVY_SKIP: a native pipeline of at least this many converted instructions (all
 /// stages) has its draws skipped while the driver builds it, instead of holding every draw
 /// behind it. "1" picks 4000; 0 or unset turns it off. In a demanding Switch 2 test title's first

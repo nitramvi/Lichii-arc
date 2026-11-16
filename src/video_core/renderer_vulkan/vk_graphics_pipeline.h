@@ -507,6 +507,8 @@ private:
 
     /// The library route failed: per-stage sets kept, with a layout a monolithic pipeline takes.
     void FallBackToMonolithic(VkRenderPass render_pass);
+    /// The layout FallBackToMonolithic gives stages emitted with one set per stage.
+    void UseMonolithicLayout();
 
     void Validate();
 
