@@ -16,6 +16,7 @@ on:
       - nx2-experimental
       - intel-arc
       - precompile-arc
+      - gpl-arc
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"

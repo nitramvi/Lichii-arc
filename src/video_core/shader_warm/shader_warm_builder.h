@@ -9,6 +9,8 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
@@ -24,9 +26,21 @@ namespace VideoCommon::ShaderWarm {
 /// files, in pipeline cache format with no recorded reads.
 std::filesystem::path ComputeWarmPath(u64 title_id);
 
+/// The title's graphics precache file (<shader dir>/<title id>/warm-graphics.bin): the vertex
+/// and fragment programs found in the game files, as single-stage pipeline cache entries with
+/// guessed draw state. Built as pipeline libraries, so it needs graphics pipeline library
+/// support.
+std::filesystem::path GraphicsWarmPath(u64 title_id);
+
 /// "Already precached" marker of a precache file (same folder, extension .done), written by the
 /// emulator after the precache ran to the end. A matching marker skips the precache at boot.
 std::filesystem::path WarmMarkerPath(const std::filesystem::path& warm_file);
+
+/// A stand-in name for `warm_file` (warm-graphics-retry.bin) whose marker, read and written with
+/// ReadWarmMarker and WriteWarmMarker, records a precache that ran to the end but had builds the
+/// driver refused. The next precache with the same stamp writes the real marker even when the
+/// driver refuses them again, so those entries are retried once, not at every start.
+std::filesystem::path WarmRetryPath(const std::filesystem::path& warm_file);
 
 /// Entry count of a precache file, written by the builder next to it (extension .count): the
 /// entry count and the file's size. The file format has no count, so the loading screen shows
@@ -109,8 +123,32 @@ bool TakeWarmBeforeStart();
 void RequestSkipWarm();
 bool TakeSkipWarm();
 
-/// Removes the title's precache file, its marker and count, the list of precached graphics
-/// pipelines older builds kept and a leftover temporary file (rebuild or delete from the UI). Returns false when a file exists but cannot be removed, with
+/// The GPU driver, device, pipeline cache version and graphics shader calls mode (1 when shared
+/// functions are built as calls) pipelines were precached for.
+struct DriverStamp {
+    u32 driver{};
+    u32 device_id{};
+    u32 cache_version{};
+    u32 graphics_no_inline{};
+
+    bool operator==(const DriverStamp&) const = default;
+};
+
+/// The title's list of cached graphics pipelines an earlier precache built
+/// (<shader dir>/<title id>/precache-graphics.bin).
+std::filesystem::path PrecachedPipelinesPath(u64 title_id);
+
+/// The pipeline key hashes in `file`, empty when there is none or it was written for another
+/// driver, device, cache version or graphics shader calls mode.
+std::unordered_set<u64> ReadPrecachedPipelines(const std::filesystem::path& file,
+                                               const DriverStamp& stamp);
+
+/// Writes `hashes` for `stamp` to `file`. Returns false when it cannot be written.
+bool WritePrecachedPipelines(const std::filesystem::path& file, const DriverStamp& stamp,
+                             const std::unordered_set<u64>& hashes);
+
+/// Removes the title's precache files (compute and graphics), their markers and counts, the list
+/// of precached graphics pipelines and leftover temporary files (rebuild or delete from the UI). Returns false when a file exists but cannot be removed, with
 /// the reason in `error` when given.
 bool DeleteWarmFiles(u64 title_id, std::string* error = nullptr);
 
@@ -125,6 +163,8 @@ struct Result {
     std::string error;           ///< Empty when ok
     size_t archives{};           ///< Shader archives found in the game files
     size_t compute_programs{};   ///< Entries written to the precache file
+    size_t vertex_programs{};    ///< Vertex entries written to the graphics precache file
+    size_t fragment_programs{};  ///< Fragment entries written to the graphics precache file
     size_t skipped{};            ///< Programs that failed to extract or convert
 };
 
@@ -133,22 +173,28 @@ struct Result {
 /// current.
 std::optional<std::string> WarmFilesStale(const std::filesystem::path& warm_file);
 
-/// Builds the precache file for the game at `game_path` (any format the loader opens, Switch 2
+/// Builds the precache files for the game at `game_path` (any format the loader opens, Switch 2
 /// .nup first), from the user's own copy and keys, with no external tools. Runs on the calling
-/// thread; `progress` is called from it; stops early when `stop` is requested.
+/// thread; `progress` is called from it; stops early when `stop` is requested. The game's
+/// existing pipeline cache, when present, is used for the graphics draw state guesses; otherwise
+/// built-in defaults are used.
 Result BuildWarmFiles(Core::System& system, const std::filesystem::path& game_path, u64 title_id,
                       const std::function<void(const Progress&)>& progress,
                       std::stop_token stop);
 
 /// Overrides for BuildWarmFilesWith (tests and tools).
 struct BuildOptions {
-    /// Folder for warm-compute.bin; empty: <shader dir>/<title id>.
+    /// Folder for warm-compute.bin and warm-graphics.bin; empty: <shader dir>/<title id>.
     std::filesystem::path output_dir;
+    /// Pipeline caches used for the draw state guesses (v2 logs or older disk caches). Unset:
+    /// the title's own (FindRuntimeCaches), else the built-in defaults. Set but empty: always
+    /// the built-in defaults.
+    std::optional<std::vector<std::filesystem::path>> runtime_caches;
     /// Conversion threads, 0: a quarter of the CPU threads, 2 to 6.
     size_t threads{};
 };
 
-/// BuildWarmFiles with an explicit output folder.
+/// BuildWarmFiles with explicit output folder and draw state sources.
 Result BuildWarmFilesWith(Core::System& system, const std::filesystem::path& game_path,
                           u64 title_id, const BuildOptions& options,
                           const std::function<void(const Progress&)>& progress,

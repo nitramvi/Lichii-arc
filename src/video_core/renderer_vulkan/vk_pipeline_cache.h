@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <stop_token>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -140,17 +142,43 @@ public:
 
     void TickFrame();
 
+    /// EDEN_NX2_HEAVY_SKIP: a clear of these targets (0 = none) in the current frame.
+    void NoteClear(u64 color_address, u64 depth_address);
+
     [[nodiscard]] ComputePipeline* CurrentComputePipeline(u64& native_key);
 
     void LoadDiskResources(u64 title_id, std::stop_token stop_loading,
                            const VideoCore::DiskResourceLoadCallback& callback);
 
+    /// What a graphics warm-up entry came to: built, not buildable (a guess the translation
+    /// rejects, which another warm-up would reject too), refused by the driver, or left out
+    /// because the driver could crash on it (a vertex program that reads its position input).
+    enum class WarmResult { Built, Unbuildable, DriverFailed, Skipped };
+
+    /// Graphics pipeline libraries (EDEN_NX2_GPL): builds the pre-rasterization and fragment
+    /// shader libraries of the pipeline `key` would make, on the calling thread, with no draw and
+    /// no pipeline kept (for a warm-up). `pools` must be the calling thread's own. Unbuildable
+    /// when the device has no libraries or the pipeline takes the monolithic route, DriverFailed
+    /// when a library build failed.
+    /// The key may hold a single stage (no partner): a vertex-only key builds just that vertex
+    /// program's pre-rasterization library (vertex SPIR-V does not depend on the fragment
+    /// stage); a fragment-only key builds just the fragment library, emitted as if the partner
+    /// writes every varying (the common variant). The key's state (attribute types, render
+    /// target formats, depth and raster state) is what the libraries are keyed and built with.
+    WarmResult WarmGraphicsLibraries(ShaderPools& pools, const GraphicsPipelineCacheKey& key,
+                                     std::span<Shader::Environment* const> envs);
+
 private:
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineSlowPath();
 
     /// Returns `pipeline` when it is built or its draw must wait for it, nullptr when the draw
-    /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw).
-    [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline) noexcept;
+    /// may be skipped while it builds (asynchronous shaders, CanDiscardPendingDraw, heavy skip).
+    [[nodiscard]] GraphicsPipeline* BuiltPipeline(GraphicsPipeline* pipeline);
+
+    /// EDEN_NX2_HEAVY_SKIP: the current draw's render target was also drawn to in one of the two
+    /// frames before this one, so it is redrawn every frame and a skipped draw only shows for a
+    /// moment. A target drawn once (a baked texture) would keep the missing draw.
+    [[nodiscard]] bool CurrentTargetIsRedrawn();
 
     /// With `keep_pointers`, the slots an evicted pipeline of this key bound stay storage buffer
     /// pointers whatever they hold now. `evicted`: a pipeline of this key was evicted.
@@ -185,13 +213,15 @@ private:
     /// Builds the pipeline as a job of shader_jobs with build_in_parallel, else leaves it for the
     /// caller's Build() (see BuildQueue). With `parallel` the stages translate at once on
     /// shader_jobs, each in IR pools of its own; their environments must be safe to read from those
-    /// threads.
+    /// threads. With `libraries_only`, `warm_skipped` (when set) tells a pipeline left out on
+    /// purpose (a vertex program that reads its position input) from one that cannot be built.
     std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         ShaderPools& pools, const GraphicsPipelineCacheKey& key,
         std::span<Shader::Environment* const> envs, PipelineStatistics* statistics,
         bool build_in_parallel, std::shared_ptr<ShaderPools> emit_pools = nullptr,
         ParallelTranslation* parallel = nullptr,
-        std::array<std::vector<u32>, 5>* spirv_out = nullptr);
+        std::array<std::vector<u32>, 5>* spirv_out = nullptr, bool libraries_only = false,
+        bool* warm_skipped = nullptr);
 
     /// Released IR pools for a build, or new ones
     [[nodiscard]] std::shared_ptr<ShaderPools> TakeSparePools();
@@ -353,6 +383,19 @@ private:
     std::atomic<bool> any_unmasked_vertex_program{};
     std::atomic<u32> unmasked_generation{}; ///< Programs added to unmasked_vertex_programs
 
+    /// The graphics part of the shader precache, after PrecacheShaders' builds: the vertex and
+    /// fragment programs of the title's warm-graphics.bin (made from the game files, missing
+    /// reads guessed; needs graphics pipeline libraries) are built as single-stage libraries on
+    /// `num_threads` threads, then released, unless a matching marker says they were built. The
+    /// driver's cache keeps them, so a later pipeline with those stages costs a link. The file is
+    /// streamed (it can be 1.5 GB). Reports progress through `callback` after `done_before` of
+    /// `total_before` builds; returns how many it built, and sets `skipped` when it was skipped
+    /// from the loading screen.
+    size_t PrecacheGraphicsWarm(u64 title_id, size_t num_threads, size_t done_before,
+                                size_t total_before, std::stop_token stop_loading,
+                                const VideoCore::DiskResourceLoadCallback& callback,
+                                bool& skipped);
+
     const Device& device;
     Scheduler& scheduler;
     DescriptorPool& descriptor_pool;
@@ -379,6 +422,10 @@ private:
     FixedPipelineState native_state{};
     GraphicsPipeline* current_pipeline{};
 
+    /// EDEN_NX2_GPL: shader libraries shared by the graphics pipelines. Declared before the
+    /// pipelines, so it outlives them.
+    GraphicsPipelineLibraryCache graphics_libraries;
+
     /// Destroys graphics pipelines unused for a while, once the GPU is done with them.
     void EvictUnusedPipelines();
     u64 frame_count{};
@@ -393,6 +440,18 @@ private:
     s64 native_hard_wait_cap_us{}; ///< 0 = unbounded (upstream behaviour)
     s64 native_hard_wait_used_us{};
     u64 native_hard_wait_skips{};
+
+    struct TargetFrames {
+        u64 last;     ///< Last frame the target was drawn to
+        u64 previous; ///< The frame before that one it was drawn to
+    };
+    std::unordered_map<u64, TargetFrames> target_frames; ///< Render target key -> frames
+    u64 last_target_key{~0ULL};
+    u64 last_target_frame{~0ULL};
+    bool last_target_redrawn{};
+    enum class TargetReason { Redrawn, NotCleared, NewTarget };
+    TargetReason last_target_reason{TargetReason::NotCleared};
+    std::unordered_map<u64, u64> cleared_frames; ///< Target address -> last frame it was cleared
     std::deque<std::pair<u64, std::unique_ptr<GraphicsPipeline>>> evicted_pipelines; ///< (tick, pipeline)
     std::unordered_set<u64> used_and_evicted; ///< Key hashes of pipelines used this session, evicted since
     std::unordered_set<u64> evicted_hashes;   ///< Key hashes of evicted pipelines not created again
