@@ -32,6 +32,7 @@
 #include "video_core/fsr.h"
 #include "video_core/render_trace.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
+#include "video_core/texture_cache/astc_disk_cache.h"
 #include "video_core/texture_cache/host_mip_limits.h"
 
 #include "video_core/engines/fermi_2d.h"
@@ -1332,6 +1333,9 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
         if (Settings::GetAstcRecompression() != Settings::AstcRecompression::Uncompressed) {
             bc_encoder_pass.emplace(device, scheduler, descriptor_pool,
                                     compute_pass_descriptor_queue);
+            if (VideoCommon::AstcDiskCache::Enabled()) {
+                astc_disk_cache = std::make_unique<VideoCommon::AstcDiskCache>();
+            }
         }
     }
     if (!device.IsKhrImageFormatListSupported()) {
@@ -2999,6 +3003,17 @@ void TextureCacheRuntime::TickFrame() {
     u64 free_bytes{};
     for (const PendingTranscode& t : free_transcodes) {
         free_bytes += decode_bytes(t);
+    }
+    while (!pending_astc_saves.empty() && scheduler.IsFree(pending_astc_saves.front().tick)) {
+        PendingAstcSave& save = pending_astc_saves.front();
+        const std::span<const u8> bytes = save.readback.mapped_span.first(save.size);
+        astc_disk_cache->Store(save.key, std::vector<u8>(bytes.begin(), bytes.end()));
+        staging_buffer_pool.FreeDeferred(save.readback);
+        pending_astc_saves.pop_front();
+    }
+    if (astc_disk_cache) {
+        // A hit skips a decode, an encode and a submit: ~2 ms each on an Arc 140V.
+        astc_disk_cache->Report(2.0);
     }
     while (!pending_transcodes.empty() && scheduler.IsFree(pending_transcodes.front().tick)) {
         PendingTranscode& done = pending_transcodes.front();
@@ -5192,6 +5207,56 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
     // The BC encoder declares layout(rgba8). Identical byte layout is not enough:
     // its storage image view must have the matching R8G8B8A8_UNORM format.
     constexpr VkFormat DecodeFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    // Encode every level into one buffer, then copy it into the image.
+    const bool bc3 = !IsOpaqueBc1Astc(device, info) &&
+                     Settings::GetAstcRecompression() != Settings::AstcRecompression::Bc1;
+    const u64 block_bytes = bc3 ? 16 : 8;
+    boost::container::small_vector<VideoCommon::BufferImageCopy, 16> copies;
+    boost::container::small_vector<u64, 16> layer_bytes; // one encoded layer of each level
+    u64 total = 0;
+    for (u32 level = 0; level < levels; ++level) {
+        const u32 level_width = (std::max)(width >> level, 1U);
+        const u32 level_height = (std::max)(height >> level, 1U);
+        const u32 blocks_x = Common::DivCeil(level_width, 4U);
+        const u32 blocks_y = Common::DivCeil(level_height, 4U);
+        layer_bytes.push_back(u64{blocks_x} * blocks_y * block_bytes);
+        const u64 size = layer_bytes.back() * layers;
+        copies.push_back({
+            .buffer_offset = total,
+            .buffer_size = size,
+            .buffer_row_length = blocks_x * 4,
+            .buffer_image_height = blocks_y * 4,
+            .image_subresource{
+                .base_level = static_cast<s32>(level),
+                .base_layer = 0,
+                .num_layers = static_cast<s32>(layers),
+            },
+            .image_offset{0, 0, 0},
+            .image_extent{level_width, level_height, 1},
+        });
+        total += size;
+    }
+
+    // lichii-arc (LICHII_ASTC_DISK_CACHE=1): the blocks this texture encoded to before, from disk.
+    std::optional<VideoCommon::AstcDiskCache::Key> disk_key;
+    if (astc_disk_cache && image.host_level_offset == 0 &&
+        map.mapped_span.size() >= image.guest_size_bytes) {
+        const std::array<u32, 14> meta{
+            static_cast<u32>(info.format), static_cast<u32>(info.type), width, height,
+            info.size.depth, levels, layers, info.block.width, info.block.height,
+            info.block.depth, info.layer_stride, info.tile_width_spacing,
+            (info.native_tiling ? 1U : 0U) | (bc3 ? 2U : 0U),
+            static_cast<u32>(image.guest_size_bytes),
+        };
+        disk_key = VideoCommon::AstcDiskCache::MakeKey(
+            map.mapped_span.first(image.guest_size_bytes),
+            std::span<const u8>(reinterpret_cast<const u8*>(meta.data()), sizeof(meta)));
+        auto cached = staging_buffer_pool.Request(total, MemoryUsage::Upload);
+        if (astc_disk_cache->Lookup(*disk_key, cached.mapped_span.first(total))) {
+            image.UploadMemory(cached.buffer, cached.offset, copies);
+            return;
+        }
+    }
     // A decode image of the same shape the GPU is done with: title 1's title screen decodes
     // dozens of textures a frame, mostly of a few shapes. Making one took 263 us; from VMA's
     // shared blocks 90 us, but freeing them there left ~1 GB of those blocks unused.
@@ -5308,35 +5373,6 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
         }
     }
 
-    // Encode every level into one buffer, then copy it into the image.
-    const bool bc3 = !IsOpaqueBc1Astc(device, info) &&
-                     Settings::GetAstcRecompression() != Settings::AstcRecompression::Bc1;
-    const u64 block_bytes = bc3 ? 16 : 8;
-    boost::container::small_vector<VideoCommon::BufferImageCopy, 16> copies;
-    boost::container::small_vector<u64, 16> layer_bytes; // one encoded layer of each level
-    u64 total = 0;
-    for (u32 level = 0; level < levels; ++level) {
-        const u32 level_width = (std::max)(width >> level, 1U);
-        const u32 level_height = (std::max)(height >> level, 1U);
-        const u32 blocks_x = Common::DivCeil(level_width, 4U);
-        const u32 blocks_y = Common::DivCeil(level_height, 4U);
-        layer_bytes.push_back(u64{blocks_x} * blocks_y * block_bytes);
-        const u64 size = layer_bytes.back() * layers;
-        copies.push_back({
-            .buffer_offset = total,
-            .buffer_size = size,
-            .buffer_row_length = blocks_x * 4,
-            .buffer_image_height = blocks_y * 4,
-            .image_subresource{
-                .base_level = static_cast<s32>(level),
-                .base_layer = 0,
-                .num_layers = static_cast<s32>(layers),
-            },
-            .image_offset{0, 0, 0},
-            .image_extent{level_width, level_height, 1},
-        });
-        total += size;
-    }
     // Deferred, and stamped once the copy below is recorded. The decode submits (wait), so a
     // buffer stamped now carried the tick before that submit while the encode and the copy ran
     // in the next one: the pool could hand it to the next transcode, or free it, once the GPU
@@ -5393,6 +5429,33 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
                                0, barrier);
     });
     image.UploadMemory(output.buffer, output.offset, copies);
+    if (disk_key && astc_disk_cache->CanQueue(total)) {
+        auto readback = staging_buffer_pool.Request(total, MemoryUsage::Download, true);
+        scheduler.RequestOutsideRenderPassOperationContext();
+        scheduler.Record([src = output.buffer, src_offset = output.offset, dst = readback.buffer,
+                          dst_offset = readback.offset, total](vk::CommandBuffer cmdbuf) {
+            const VkBufferCopy copy{
+                .srcOffset = src_offset,
+                .dstOffset = dst_offset,
+                .size = total,
+            };
+            cmdbuf.CopyBuffer(src, dst, copy);
+            const VkMemoryBarrier barrier{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+            };
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
+                                   barrier);
+        });
+        pending_astc_saves.push_back(PendingAstcSave{
+            .tick = scheduler.CurrentTick(),
+            .readback = readback,
+            .key = *disk_key,
+            .size = total,
+        });
+    }
     staging_buffer_pool.FreeDeferred(output);
     pending.tick = scheduler.CurrentTick();
     pending_transcodes.push_back(std::move(pending));

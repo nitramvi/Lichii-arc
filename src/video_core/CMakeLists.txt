@@ -393,6 +393,8 @@ add_library(video_core STATIC
     texture_cache/stale_pages.h
     texture_cache/texture_cache.cpp
     texture_cache/texture_cache.h
+    texture_cache/astc_disk_cache.cpp
+    texture_cache/astc_disk_cache.h
     texture_cache/texture_cache_base.h
     texture_cache/types.h
     texture_cache/util.cpp

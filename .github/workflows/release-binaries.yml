@@ -17,6 +17,7 @@ on:
       - intel-arc
       - precompile-arc
       - gpl-arc
+      - invent-h
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"
