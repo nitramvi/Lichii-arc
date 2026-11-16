@@ -650,6 +650,16 @@ u32 AutoMaskThousandths() {
     return value;
 }
 
+/// lichii-arc: LICHII_OOT_AUTO_MASK_MODE=2 compares in perceptual space with a contrast-relative
+/// tolerance (bright sun, bloom and glare no longer flood the mask); 1 or unset is the original.
+bool AutoMaskPerceptual() {
+    static const bool perceptual = [] {
+        const char* value = std::getenv("LICHII_OOT_AUTO_MASK_MODE");
+        return value && value[0] == '2';
+    }();
+    return perceptual;
+}
+
 vk::Image CreateOcarinaImage(MemoryAllocator& allocator, VkExtent2D extent, VkFormat format,
                             VkImageUsageFlags usage) {
     return allocator.CreateImage(VkImageCreateInfo{
@@ -1062,8 +1072,10 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             if (!state.auto_mask_pass) {
                 state.auto_mask_pass = std::make_unique<OcarinaEffectsPass<4>>(
                     state.device, state.scheduler, state.pool, OCARINA_AUTO_MASK_COMP_SPV);
-                LOG_INFO(Render_Vulkan, "Ocarina automatic responsive mask on (threshold {:.3f})",
-                         static_cast<f32>(AutoMaskThousandths()) / 1000.0f);
+                LOG_INFO(Render_Vulkan,
+                         "Ocarina automatic responsive mask on (threshold {:.3f}, mode {})",
+                         static_cast<f32>(AutoMaskThousandths()) / 1000.0f,
+                         AutoMaskPerceptual() ? 2 : 1);
             }
             if (!state.auto_mask || state.auto_mask_extent.width != extent.width ||
                 state.auto_mask_extent.height != extent.height) {
@@ -1089,7 +1101,7 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
                                   state.previous_slot->extent.width == extent.width &&
                                   state.previous_slot->extent.height == extent.height;
         const u32 control = (has_previous ? 1U : 0U) | (bias_view ? 2U : 0U) |
-                            (AutoMaskThousandths() << 8);
+                            (AutoMaskPerceptual() ? 4U : 0U) | (AutoMaskThousandths() << 8);
         state.scheduler.RequestOutsideRenderPassOperationContext();
         state.queue.Acquire(state.scheduler, 5);
         state.queue.AddSampledImage(*resources.color_view, sampler);

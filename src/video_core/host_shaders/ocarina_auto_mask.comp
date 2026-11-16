@@ -14,11 +14,60 @@ layout(binding = 1) uniform sampler2D previous_color;
 layout(binding = 2) uniform sampler2D motion;
 layout(binding = 3) uniform sampler2D effects_bias;
 layout(binding = 4, r16f) uniform writeonly image2D mask;
-// bit 0: previous colour valid; bit 1: effects bias valid; bits 8..: threshold in 1/1000.
+// bit 0: previous colour valid; bit 1: effects bias valid; bit 2: perceptual mode
+// (LICHII_OOT_AUTO_MASK_MODE=2); bits 8..: threshold in 1/1000.
 layout(push_constant) uniform Controls { uint control; } controls;
 
 float Luma(vec3 color) {
     return dot(clamp(color, vec3(0.0), vec3(1.0)), vec3(0.299, 0.587, 0.114));
+}
+
+// Perceptual brightness: Reinhard-compressed luma of the unclamped colour, so the sun, bloom and
+// god rays (far above 1.0, where tiny relative flicker is a large linear step) weigh like the rest.
+float Perceptual(vec3 color) {
+    float l = dot(max(color, vec3(0.0)), vec3(0.299, 0.587, 0.114));
+    return l / (1.0 + l);
+}
+
+// Mode 2: the same test in perceptual space, with a tolerance that grows with this frame's own
+// local contrast (shimmering highlights and thin bright edges) and a damped mask on near-white
+// pixels (sun disc, sky glare), where nothing moves on its own but brightness flickers.
+float PerceptualMask(ivec2 pixel, ivec2 last, float threshold) {
+    float current = Perceptual(texelFetch(current_color, pixel, 0).rgb);
+    float cur_low = current;
+    float cur_high = current;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            if (x == 0 && y == 0) {
+                continue;
+            }
+            float l = Perceptual(texelFetch(current_color,
+                                            clamp(pixel + ivec2(x, y), ivec2(0), last), 0).rgb);
+            cur_low = min(cur_low, l);
+            cur_high = max(cur_high, l);
+        }
+    }
+    vec2 history = vec2(pixel) + 0.5 + texelFetch(motion, pixel, 0).rg;
+    ivec2 center = ivec2(floor(history));
+    if (any(lessThan(center, ivec2(0))) || any(greaterThan(center, last))) {
+        return 0.0;
+    }
+    float low = 1.0;
+    float high = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float l = Perceptual(texelFetch(previous_color,
+                                            clamp(center + ivec2(x, y), ivec2(0), last), 0).rgb);
+            low = min(low, l);
+            high = max(high, l);
+        }
+    }
+    float tolerance = threshold + 0.5 * (cur_high - cur_low);
+    float outside = max(low - current, current - high);
+    float value = smoothstep(tolerance, tolerance * 2.5, outside);
+    // Near-white: keep at most a quarter of the mask.
+    value *= mix(1.0, 0.25, smoothstep(0.8, 0.9, min(current, low)));
+    return value;
 }
 
 void main() {
@@ -30,7 +79,9 @@ void main() {
     uint control = controls.control;
     float threshold = max(float(control >> 8) / 1000.0, 0.001);
     float value = 0.0;
-    if ((control & 1u) != 0u) {
+    if ((control & 5u) == 5u) {
+        value = PerceptualMask(pixel, size - 1, threshold);
+    } else if ((control & 1u) != 0u) {
         ivec2 last = size - 1;
         float current = Luma(texelFetch(current_color, pixel, 0).rgb);
         vec2 history = vec2(pixel) + 0.5 + texelFetch(motion, pixel, 0).rg;

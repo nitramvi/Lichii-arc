@@ -8,12 +8,15 @@
 #include <bitset>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include "common/container/unordered_map.h"
 #include "common/container/unordered_set.h"
 #include <utility>
@@ -456,19 +459,185 @@ u64 AllocatedUsage(VkDeviceSize driver_usage, const VmaBudget& vma_budget) {
 PFN_vkAllocateMemory g_vma_allocate_memory{};
 PFN_vkFreeMemory g_vma_free_memory{};
 
+// lichii-arc: LICHII_INTEL_MEM_POOL=1 recycles VMA's device memory. On the Arc 140V's Windows
+// driver vkAllocateMemory and vkFreeMemory are slow (one frame spent 637 ms freeing and 292 ms
+// allocating in OoT): VMA's 16 MiB blocks and its dedicated allocations come and go by the
+// thousand as textures stream. A freed allocation with no dedicated owner is kept for a while
+// (capped) and handed back to the next request of the same memory type, size and flags; the ones
+// nobody reused are given back to the driver one at a time from a background thread, spread out,
+// instead of in bursts inside a frame.
+namespace MemoryRecycler {
+
+bool Wanted() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("LICHII_INTEL_MEM_POOL");
+        return value && value[0] == '1';
+    }();
+    return wanted;
+}
+
+struct Key {
+    u32 type;
+    VkDeviceSize size;
+    VkMemoryAllocateFlags flags;
+    bool operator==(const Key&) const = default;
+};
+
+struct Kept {
+    VkDeviceMemory memory;
+    Key key;
+    std::chrono::steady_clock::time_point since;
+};
+
+constexpr VkDeviceSize KeepLimit = 384ull * 1024 * 1024;
+constexpr auto KeepFor = std::chrono::seconds{4};
+
+std::mutex g_mutex;
+std::condition_variable g_wake;
+std::vector<Kept> g_kept;
+VkDeviceSize g_kept_bytes{};
+std::unordered_map<VkDeviceMemory, Key> g_live;
+VkDevice g_device{};
+std::thread g_thread;
+bool g_stop{};
+u64 g_reused{};
+u64 g_kept_total{};
+
+// Only plain allocations (optionally with VkMemoryAllocateFlagsInfo) can be handed to someone
+// else; a dedicated allocation belongs to its image or buffer.
+std::optional<Key> KeyOf(const VkMemoryAllocateInfo& info) {
+    VkMemoryAllocateFlags flags = 0;
+    for (auto* next = static_cast<const VkBaseInStructure*>(info.pNext); next;
+         next = next->pNext) {
+        if (next->sType != VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO) {
+            return std::nullopt;
+        }
+        const auto* flags_info = reinterpret_cast<const VkMemoryAllocateFlagsInfo*>(next);
+        if (flags_info->deviceMask != 0 && flags_info->deviceMask != 1) {
+            return std::nullopt;
+        }
+        flags = flags_info->flags;
+    }
+    return Key{info.memoryTypeIndex, info.allocationSize, flags};
+}
+
+void Worker() {
+    std::unique_lock lock{g_mutex};
+    while (!g_stop) {
+        g_wake.wait_for(lock, std::chrono::milliseconds{250});
+        if (g_stop) {
+            break;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        // One at a time, oldest first: the driver's cost is spread over time.
+        auto oldest = std::ranges::min_element(g_kept, {}, &Kept::since);
+        if (oldest == g_kept.end() || now - oldest->since < KeepFor) {
+            continue;
+        }
+        const Kept kept = *oldest;
+        *oldest = g_kept.back();
+        g_kept.pop_back();
+        g_kept_bytes -= kept.key.size;
+        const VkDevice device = g_device;
+        lock.unlock();
+        g_vma_free_memory(device, kept.memory, nullptr);
+        lock.lock();
+    }
+}
+
+void FreeAllLocked() {
+    for (const Kept& kept : g_kept) {
+        g_vma_free_memory(g_device, kept.memory, nullptr);
+    }
+    g_kept.clear();
+    g_kept_bytes = 0;
+}
+
+void Shutdown() {
+    if (!Wanted()) {
+        return;
+    }
+    {
+        std::scoped_lock lock{g_mutex};
+        g_stop = true;
+    }
+    g_wake.notify_all();
+    if (g_thread.joinable()) {
+        g_thread.join();
+    }
+    std::scoped_lock lock{g_mutex};
+    FreeAllLocked();
+    g_live.clear();
+    LOG_INFO(Render_Vulkan, "Memory recycler: {} allocations reused, {} kept in all", g_reused,
+             g_kept_total);
+    g_stop = false;
+}
+
+} // namespace MemoryRecycler
+
 VKAPI_ATTR VkResult VKAPI_CALL TimedAllocateMemory(VkDevice device,
                                                    const VkMemoryAllocateInfo* allocate_info,
                                                    const VkAllocationCallbacks* allocator,
                                                    VkDeviceMemory* memory) {
     using namespace VideoCommon::StutterTrace;
     const SiteScope site{Site::MemoryAllocate};
-    return g_vma_allocate_memory(device, allocate_info, allocator, memory);
+    if (!MemoryRecycler::Wanted()) {
+        return g_vma_allocate_memory(device, allocate_info, allocator, memory);
+    }
+    namespace R = MemoryRecycler;
+    const std::optional<R::Key> key = R::KeyOf(*allocate_info);
+    if (key) {
+        std::scoped_lock lock{R::g_mutex};
+        R::g_device = device;
+        if (!R::g_thread.joinable()) {
+            R::g_thread = std::thread{R::Worker};
+        }
+        const auto match = std::ranges::find(R::g_kept, *key, &R::Kept::key);
+        if (match != R::g_kept.end()) {
+            *memory = match->memory;
+            *match = R::g_kept.back();
+            R::g_kept.pop_back();
+            R::g_kept_bytes -= key->size;
+            R::g_live.insert_or_assign(*memory, *key);
+            ++R::g_reused;
+            return VK_SUCCESS;
+        }
+    }
+    VkResult result = g_vma_allocate_memory(device, allocate_info, allocator, memory);
+    if (result != VK_SUCCESS) {
+        // Out of memory: give back everything kept and try once more.
+        std::scoped_lock lock{R::g_mutex};
+        if (!R::g_kept.empty()) {
+            R::FreeAllLocked();
+            result = g_vma_allocate_memory(device, allocate_info, allocator, memory);
+        }
+    }
+    if (result == VK_SUCCESS && key) {
+        std::scoped_lock lock{R::g_mutex};
+        R::g_live.insert_or_assign(*memory, *key);
+    }
+    return result;
 }
 
 VKAPI_ATTR void VKAPI_CALL TimedFreeMemory(VkDevice device, VkDeviceMemory memory,
                                            const VkAllocationCallbacks* allocator) {
     using namespace VideoCommon::StutterTrace;
     const SiteScope site{Site::MemoryFree};
+    if (MemoryRecycler::Wanted() && memory != VK_NULL_HANDLE) {
+        namespace R = MemoryRecycler;
+        std::unique_lock lock{R::g_mutex};
+        const auto live = R::g_live.find(memory);
+        if (live != R::g_live.end()) {
+            const R::Key key = live->second;
+            R::g_live.erase(live);
+            if (!R::g_stop && R::g_kept_bytes + key.size <= R::KeepLimit) {
+                R::g_kept.push_back({memory, key, std::chrono::steady_clock::now()});
+                R::g_kept_bytes += key.size;
+                ++R::g_kept_total;
+                return;
+            }
+        }
+    }
     g_vma_free_memory(device, memory, allocator);
 }
 
@@ -1067,6 +1236,7 @@ Device::~Device() {
         }
     }
     vmaDestroyAllocator(allocator);
+    MemoryRecycler::Shutdown();
 }
 
 VideoCommon::Fsr4PortDevice Device::Fsr4PortDevice() const {
