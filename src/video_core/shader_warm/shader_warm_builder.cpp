@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 #include <unordered_map>
@@ -317,7 +318,7 @@ void WriteWarmCount(const fs::path& warm_file, u64 entries) {
         return;
     }
     std::ofstream out(WarmCountPath(warm_file), std::ios::trunc);
-    out << entries << ' ' << size << ' ' << WarmBuilderVersion << '\n';
+    out << entries << ' ' << size << ' ' << CurrentWarmBuilderVersion() << '\n';
 }
 
 } // Anonymous namespace
@@ -550,7 +551,7 @@ std::optional<std::string> WarmFilesStale(const fs::path& warm_file) {
     u64 entries{};
     u64 size{};
     u32 builder{};
-    if (!(in >> entries >> size >> builder) || builder != WarmBuilderVersion) {
+    if (!(in >> entries >> size >> builder) || builder != CurrentWarmBuilderVersion()) {
         return "built by an older version";
     }
     if (fs::file_size(warm_file, ec) != size || ec) {
@@ -695,6 +696,17 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         std::vector<u8> env;
     };
     std::vector<HeldVertex> held_vertices;
+    // lichii-arc (LICHII_WARM_TESS): the vertex and tessellation evaluation programs of each BNSH
+    // variation with a tessellation stage, written last as one entry each so the warm-up builds
+    // their pre-rasterization library, which a vertex-only entry cannot.
+    const bool warm_tess = WarmTessellationEnabled() && stats.templates[2].has_value();
+    struct TessGroup {
+        std::optional<size_t> vertex;
+        std::optional<size_t> tess;
+    };
+    std::map<u64, TessGroup> tess_groups;
+    std::unordered_map<size_t, std::vector<u8>> tess_envs;
+    std::unordered_map<u128, std::pair<u64, u64>, U128Hasher> vertex_env_spans;
     size_t archive_errors = 0;
     size_t member_errors = 0;
     size_t seq = 0;
@@ -727,6 +739,10 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         program.built = true;
         program.hash = r.hash;
         program.environment = Hash128(r.bytes);
+        if (program.stage == 2) {
+            tess_envs.try_emplace(index, std::move(r.bytes));
+            return;
+        }
         if (program.stage == 4) {
             if (!fragment_hashes.insert(program.environment).second) {
                 return; // same key as an earlier entry
@@ -747,6 +763,11 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         }
         const auto key = GraphicsEntryKey(0, vertex_template, r.hash, 0);
         Write(graphics_out, u32{1});
+        if (warm_tess) {
+            vertex_env_spans.try_emplace(program.environment,
+                                         static_cast<u64>(graphics_out.tellp()),
+                                         static_cast<u64>(r.bytes.size()));
+        }
         graphics_out.write(reinterpret_cast<const char*>(r.bytes.data()),
                            static_cast<std::streamsize>(r.bytes.size()));
         const auto key_offset = static_cast<u64>(graphics_out.tellp());
@@ -770,11 +791,23 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         const auto data = archive.file->ReadAllBytes();
         const auto name = archive.path.substr(archive.path.rfind('/') + 1);
         const auto on_record = [&](const ShaderRecord& record) {
-            const bool is_graphics =
-                record.stage == ProgramStage::Vertex || record.stage == ProgramStage::Fragment;
+            const bool is_tess = warm_tess && record.stage == ProgramStage::TessEval &&
+                                 record.group != 0;
+            const bool is_graphics = record.stage == ProgramStage::Vertex ||
+                                     record.stage == ProgramStage::Fragment || is_tess;
             if (record.stage != ProgramStage::Compute && !is_graphics) {
                 return;
             }
+            const auto note_group = [&](size_t program_index) {
+                if (!warm_tess || record.group == 0) {
+                    return;
+                }
+                if (record.stage == ProgramStage::TessEval) {
+                    tess_groups[record.group].tess = program_index;
+                } else if (record.stage == ProgramStage::Vertex) {
+                    tess_groups[record.group].vertex = program_index;
+                }
+            };
             const std::array program_parts{Hash128(record.code), Hash128(record.constants)};
             const u128 code = Common::CityHash128(
                 reinterpret_cast<const char*>(program_parts.data()), sizeof(program_parts));
@@ -782,6 +815,7 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
             Job job;
             if (is_graphics) {
                 const auto [it, inserted] = graphics_index.try_emplace(code, graphics.size());
+                note_group(it->second);
                 if (!inserted) {
                     GraphicsProgram& program = graphics[it->second];
                     if (program.control == control) {
@@ -789,8 +823,10 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
                     }
                     return;
                 }
-                graphics.push_back({record.stage == ProgramStage::Vertex ? 0U : 4U, control,
-                                    {static_cast<u32>(archive_index)}});
+                const u32 stage_number = record.stage == ProgramStage::Vertex   ? 0U
+                                         : record.stage == ProgramStage::TessEval ? 2U
+                                                                                  : 4U;
+                graphics.push_back({stage_number, control, {static_cast<u32>(archive_index)}});
                 job.graphics = true;
                 job.stage = graphics.back().stage;
                 job.graphics_index = it->second;
@@ -940,6 +976,52 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         held.env = {};
     }
     result.vertex_programs = vertex_keys.size();
+    if (warm_tess) {
+        graphics_out.flush();
+        std::ifstream back(graphics_tmp, std::ios::binary);
+        std::set<std::pair<u64, u64>> written_pairs;
+        for (const auto& [group, members] : tess_groups) {
+            // Groups without a tessellation stage stop here: most variations.
+            if (!members.vertex || !members.tess) {
+                continue;
+            }
+            const GraphicsProgram& vertex = graphics[*members.vertex];
+            const GraphicsProgram& tess = graphics[*members.tess];
+            if (!vertex.built || !tess.built) {
+                continue;
+            }
+            const auto span_it = vertex_env_spans.find(vertex.environment);
+            const auto tess_it = tess_envs.find(*members.tess);
+            if (span_it == vertex_env_spans.end() || tess_it == tess_envs.end() || !back) {
+                continue;
+            }
+            if (!written_pairs.emplace(vertex.hash, tess.hash).second) {
+                continue;
+            }
+            std::vector<u8> vertex_env(static_cast<size_t>(span_it->second.second));
+            back.seekg(static_cast<std::streamoff>(span_it->second.first));
+            back.read(reinterpret_cast<char*>(vertex_env.data()),
+                      static_cast<std::streamsize>(vertex_env.size()));
+            if (!back) {
+                back.clear();
+                continue;
+            }
+            GraphicsKey key = *stats.templates[2];
+            std::memcpy(key.data() + 1 * 8, &vertex.hash, sizeof(u64));
+            std::memcpy(key.data() + 3 * 8, &tess.hash, sizeof(u64));
+            std::memset(key.data() + 5 * 8, 0, sizeof(u64));
+            const u64 types = attribute_types(vertex);
+            std::memcpy(key.data() + AttributeTypesOffset, &types, sizeof(types));
+            Write(graphics_out, u32{2});
+            graphics_out.write(reinterpret_cast<const char*>(vertex_env.data()),
+                               static_cast<std::streamsize>(vertex_env.size()));
+            graphics_out.write(reinterpret_cast<const char*>(tess_it->second.data()),
+                               static_cast<std::streamsize>(tess_it->second.size()));
+            graphics_out.write(reinterpret_cast<const char*>(key.data()),
+                               static_cast<std::streamsize>(key.size()));
+            ++result.tess_pipelines;
+        }
+    }
     compute_out.close();
     graphics_out.close();
     if (!compute_out || !graphics_out) {
@@ -980,13 +1062,15 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         return fail("Cannot replace " + Common::FS::PathToUTF8String(graphics_path));
     }
     WriteWarmCount(compute_path, result.compute_programs);
-    WriteWarmCount(graphics_path, result.vertex_programs + result.fragment_programs);
+    WriteWarmCount(graphics_path,
+                   result.vertex_programs + result.fragment_programs + result.tess_pipelines);
     report(StageWriting, patches.size(), patches.size());
     result.ok = true;
     LOG_INFO(Render_Vulkan,
-             "Shader precache build for {:016x}: {} compute, {} vertex, {} fragment entries, {} "
-             "programs skipped, {} archive and {} member errors, {:.1f} s",
+             "Shader precache build for {:016x}: {} compute, {} vertex, {} fragment, {} "
+             "tessellated entries, {} programs skipped, {} archive and {} member errors, {:.1f} s",
              title_id, result.compute_programs, result.vertex_programs, result.fragment_programs,
+             result.tess_pipelines,
              result.skipped, archive_errors, member_errors,
              std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count());
     return result;

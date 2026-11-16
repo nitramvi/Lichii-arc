@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <unordered_set>
@@ -160,7 +161,9 @@ bool ReadPipelineRecord(std::span<const u8> bytes, size_t& cur,
             continue;
         }
         const Env& env = envs[env_index++];
-        if (env.stage != 0 && env.stage != 4) {
+        // Vertex and fragment stages, and with LICHII_WARM_TESS the tessellation evaluation
+        // stage, whose records give the draw state of tessellated pipelines (templates[2]).
+        if (env.stage != 0 && env.stage != 4 && (env.stage != 2 || !WarmTessellationEnabled())) {
             continue;
         }
         const PairHash id{Hash128(bytes.subspan(env.begin, env.end - env.begin)),
@@ -232,6 +235,18 @@ std::optional<std::string> LowerProgram(std::span<const u8> program, bool graphi
     std::memcpy(out.code.data(), code->code.data(), out.code.size());
     out.texture_buffer = code->texture_bound;
     return std::nullopt;
+}
+
+bool WarmTessellationEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("LICHII_WARM_TESS");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+u32 CurrentWarmBuilderVersion() {
+    return WarmTessellationEnabled() ? WarmBuilderVersion + 1000 : WarmBuilderVersion;
 }
 
 u64 StageHash(std::span<const u8> code) {
@@ -400,8 +415,9 @@ RuntimeStats ReadRuntimeStats(const std::vector<std::filesystem::path>& caches) 
                   normalized.begin() + AttributeTypesOffset + 8, u8{0});
         return Hash128(normalized);
     };
-    for (size_t index = 0; index < 2; ++index) {
-        const u32 stage = index == 0 ? 0 : 4;
+    for (size_t index = 0; index < stats.templates.size(); ++index) {
+        constexpr std::array<u32, 3> TemplateStages{0, 4, 2};
+        const u32 stage = TemplateStages[index];
         // Counter.most_common over the records of this stage that `keep` accepts: index of the
         // first record of the group with the highest count, the first seen among equals.
         const auto most_common = [&](const auto& group_of,

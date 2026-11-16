@@ -88,6 +88,8 @@ struct Record {
     Bytes code;
     Bytes control;
     std::optional<Bytes> constants;
+    /// BNSH: 1 + the variation the stage belongs to (its partner stages share it), else 0.
+    u32 group{};
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -494,7 +496,9 @@ std::vector<Record> ParseBnsh(Bytes data) {
                     throw ArchiveError("BNSH graphics stage disagrees with native header");
                 }
             }
-            result.push_back({stage, code, control});
+            Record stage_record{stage, code, control};
+            stage_record.group = variation + 1;
+            result.push_back(stage_record);
         }
     }
     return result;
@@ -801,11 +805,21 @@ struct Walker {
 
     /// Passes every record to the caller's record callback.
     void Emit(const std::vector<Record>& records) const {
+        u32 last_group = 0;
         for (const auto& record : records) {
-            on_record(ShaderRecord{record.stage, record.code, record.control,
-                                   record.constants.value_or(ConstantTable(record))});
+            ShaderRecord shader{record.stage, record.code, record.control,
+                                record.constants.value_or(ConstantTable(record))};
+            if (record.group != 0) {
+                shader.group = group_base + record.group;
+                last_group = std::max(last_group, record.group);
+            }
+            on_record(shader);
         }
+        group_base += last_group;
     }
+
+    /// Makes the BNSH variation groups of one walk unique across its containers.
+    mutable u64 group_base{};
 
     /// Walks one archive member, reporting its error to the caller instead of stopping the walk.
     void WalkMember(Bytes payload, const std::string& name, int depth) const {

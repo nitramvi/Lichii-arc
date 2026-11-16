@@ -47,6 +47,9 @@ struct ShaderRecord {
     /// The program's constant table (driver bank 1), empty when it has none: control word 60 is
     /// its size and word 64 its offset from the start of the program allocation.
     std::span<const u8> constants;
+    /// Nonzero for the stages of one BNSH variation (one program: its vertex, tessellation,
+    /// geometry and fragment stages share it), unique within one WalkArchive call; 0 elsewhere.
+    u64 group{};
 };
 
 /// The game's Zstandard dictionaries (Pack/ZsDic.pack.zs), by dictionary ID.

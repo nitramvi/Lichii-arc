@@ -2453,7 +2453,10 @@ size_t PipelineCache::PrecacheGraphicsWarm(u64 title_id, size_t num_threads, siz
                 GraphicsPipelineLibraryCache::SetNoRetainOnThisThread(true);
                 ShaderPools pools;
                 while (!cancel.load(std::memory_order_relaxed)) {
-                    FileEnvironment env;
+                    // One environment per entry, or (LICHII_WARM_TESS) a vertex and a
+                    // tessellation evaluation stage for a tessellated pre-rasterization library.
+                    std::array<FileEnvironment, 3> envs;
+                    u32 num_envs{};
                     GraphicsPipelineCacheKey key{};
                     {
                         std::scoped_lock lock{reader.mutex};
@@ -2461,16 +2464,17 @@ size_t PipelineCache::PrecacheGraphicsWarm(u64 title_id, size_t num_threads, siz
                             break;
                         }
                         try {
-                            u32 num_envs{};
                             reader.file.read(reinterpret_cast<char*>(&num_envs),
                                              sizeof(num_envs));
-                            if (num_envs != 1) {
+                            if (num_envs == 0 || num_envs > envs.size()) {
                                 LOG_WARNING(Render_Vulkan,
                                             "Shader precache: unexpected graphics entry, stopping");
                                 reader.failed = true;
                                 break;
                             }
-                            env.Deserialize(reader.file, reader.end);
+                            for (u32 index = 0; index < num_envs; ++index) {
+                                envs[index].Deserialize(reader.file, reader.end);
+                            }
                             reader.file.read(reinterpret_cast<char*>(&key), sizeof(key));
                             ++reader.read;
                             reader.position = reader.file.tellg();
@@ -2494,11 +2498,16 @@ size_t PipelineCache::PrecacheGraphicsWarm(u64 title_id, size_t num_threads, siz
                     if (adapted) {
                         reader.adapted_builds.fetch_add(1);
                     }
-                    env.SetGuessMissing(&guess);
+                    std::array<Shader::Environment*, 3> env_ptrs{};
+                    for (u32 index = 0; index < num_envs; ++index) {
+                        envs[index].SetGuessMissing(&guess);
+                        env_ptrs[index] = &envs[index];
+                    }
                     WarmResult result = WarmResult::Unbuildable;
                     try {
-                        Shader::Environment* const env_ptr = &env;
-                        result = WarmGraphicsLibraries(pools, key, std::span{&env_ptr, 1});
+                        result = WarmGraphicsLibraries(
+                            pools, key,
+                            std::span<Shader::Environment* const>{env_ptrs.data(), num_envs});
                     } catch (const vk::Exception& e) {
                         LOG_DEBUG(Render_Vulkan, "Shader precache: {}", e.what());
                         result = WarmResult::DriverFailed;

@@ -49,6 +49,16 @@ constexpr u64 DefaultAttributeTypes = 0x555555555555f555ULL;
 /// effects. 3: .ptcl particle effects (Fire Emblem). 4: graphics programs (warm-graphics.bin).
 constexpr u32 WarmBuilderVersion = 4;
 
+/// lichii-arc: LICHII_WARM_TESS=1 adds the tessellated programs of the game files (each BNSH
+/// variation with a tessellation stage: its vertex, tessellation and fragment stages together) to
+/// warm-graphics.bin, so the warm-up builds their pipeline libraries too. Off: the files are the
+/// same as without it.
+bool WarmTessellationEnabled();
+
+/// The builder version recorded in a precache's count file: WarmBuilderVersion, or a distinct one
+/// with LICHII_WARM_TESS=1, so turning it on or off builds the files again once.
+u32 CurrentWarmBuilderVersion();
+
 using GraphicsKey = std::array<u8, GraphicsKeySize>;
 using ComputeKey = std::array<u8, 24>;
 
@@ -103,10 +113,11 @@ GraphicsKey GraphicsEntryKey(u32 stage, const GraphicsKey& template_key, u64 sta
 
 /// Draw state statistics from runtime pipeline caches recorded by the game.
 struct RuntimeStats {
-    /// Draw state per stage (index 0 vertex, 1 fragment), hash slots zeroed: among the records
-    /// with the most common render target (samples, depth, color formats), the most common
-    /// FixedPipelineState. Empty when the caches have no record of that stage.
-    std::array<std::optional<GraphicsKey>, 2> templates;
+    /// Draw state per stage (index 0 vertex, 1 fragment, 2 tessellation evaluation: the
+    /// tessellated pipelines), hash slots zeroed: among the records with the most common render
+    /// target (samples, depth, color formats), the most common FixedPipelineState. Empty when the
+    /// caches have no record of that stage.
+    std::array<std::optional<GraphicsKey>, 3> templates;
     /// Vertex stage hash -> attribute types (key bytes 112-119) of each unique occurrence.
     std::unordered_map<u64, std::vector<u64>> vertex_attributes;
     size_t occurrences{};
