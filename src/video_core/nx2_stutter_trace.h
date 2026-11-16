@@ -108,7 +108,9 @@ inline constexpr std::array<std::string_view, SiteCount> site_names{
 
 [[nodiscard]] inline bool ReadEnv() {
     const char* const value = std::getenv("EDEN_NX2_STUTTER_TRACE");
-    return value != nullptr && value[0] == '1';
+    // lichii-arc: LICHII_DIAG=1 needs the frame accounting too.
+    const char* const diag = std::getenv("LICHII_DIAG");
+    return (value != nullptr && value[0] == '1') || (diag != nullptr && diag[0] == '1');
 }
 
 inline bool g_enabled = ReadEnv();

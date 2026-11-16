@@ -19,6 +19,7 @@
 
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 
+#include "common/lichii_diag.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/dkb_cpu_trace.h"
@@ -317,6 +318,11 @@ Scheduler::FrameMark Scheduler::NextFrameMark() {
         return FrameMark::Both;
     }
     u32 marks = gpu_busy_marks.load(std::memory_order_relaxed);
+    // lichii-arc: LICHII_DIAG=1 keeps asking for samples (the trace takes about one a second).
+    if (marks == 0 && Common::LichiiDiag::Enabled()) {
+        gpu_busy_marks.store(2, std::memory_order_relaxed);
+        marks = 2;
+    }
     if (marks == 0 ||
         !gpu_busy_marks.compare_exchange_strong(marks, marks - 1, std::memory_order_relaxed)) {
         return FrameMark::None;
@@ -1089,6 +1095,9 @@ void Scheduler::TraceGpuSubmission() {
         if (trace_gpu_publish && trace_gpu_skipped == 0) {
             std::scoped_lock lock{gpu_busy_mutex};
             gpu_busy = GpuBusySample{busy_ms, std::chrono::steady_clock::now()};
+        }
+        if (trace_gpu_publish && trace_gpu_skipped == 0) {
+            Common::LichiiDiag::AddGpuFrameSample(busy_ms);
         }
         const double span_ms = trace_gpu_skipped == 0
             ? static_cast<double>(Common::DkbFrameTrace::TimestampDelta(

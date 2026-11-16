@@ -7,11 +7,18 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <span>
 #include <string>
+#include <vector>
 
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
 
+#include "common/fs/file.h"
+#include "common/fs/fs.h"
+#include "common/fs/path_util.h"
+#include "common/lichii_diag.h"
 #include "common/logging.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_xess_upscaler.h"
@@ -111,7 +118,123 @@ std::array<f32, 2> ScaleFromEnv(const char* name) {
     }
     return scale;
 }
+/// lichii-arc: where LICHII_XESS_EARLY_INIT keeps XeSS's pipeline cache (one per installation;
+/// the driver ignores data from another device or driver version).
+std::filesystem::path PipelineCachePath() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir) / "xess_vk_pipelines.bin";
+}
 } // Anonymous namespace
+
+bool XessUpscaler::EarlyInitWanted() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("LICHII_XESS_EARLY_INIT");
+        return value && value[0] == '1';
+    }();
+    return wanted;
+}
+
+u32 XessUpscaler::InitFlags() const {
+    // Tonemapped colour, standard depth, render-size motion vectors in pixels.
+    u32 flags = XESS_INIT_FLAG_LDR_INPUT_COLOR;
+    // lichii-arc: the automatic responsive mask (vk_ocarina_camera_motion.cpp) comes every frame.
+    if (ResponsiveMaskWanted()) {
+        flags |= XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
+    }
+    return flags;
+}
+
+void XessUpscaler::StartPipelineBuild() {
+    if (!EarlyInitWanted() || !api->build_pipelines || !api->get_pipeline_build_status) {
+        return;
+    }
+    std::vector<u8> data;
+    const auto path = PipelineCachePath();
+    if (Common::FS::Exists(path)) {
+        Common::FS::IOFile file{path, Common::FS::FileAccessMode::Read,
+                                Common::FS::FileType::BinaryFile};
+        if (file.IsOpen()) {
+            data.resize(file.GetSize());
+            if (file.ReadSpan(std::span<u8>{data}) != data.size()) {
+                data.clear();
+            }
+        }
+    }
+    try {
+        pipeline_cache = device.GetLogical().CreatePipelineCache(VkPipelineCacheCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .initialDataSize = data.size(),
+            .pInitialData = data.empty() ? nullptr : data.data(),
+        });
+    } catch (const vk::Exception&) {
+        // Data the driver rejects: start empty.
+        pipeline_cache = device.GetLogical().CreatePipelineCache(VkPipelineCacheCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .initialDataSize = 0,
+            .pInitialData = nullptr,
+        });
+    }
+    build_begin = std::chrono::steady_clock::now();
+    const xess_result_t result = api->build_pipelines(static_cast<xess_context_handle_t>(context),
+                                                      *pipeline_cache, false, InitFlags());
+    if (result != XESS_RESULT_SUCCESS) {
+        LOG_WARNING(Render_Vulkan,
+                    "XeSS: xessVKBuildPipelines failed ({}); building inside xessVKInit",
+                    static_cast<int>(result));
+        return;
+    }
+    building_pipelines = true;
+    LOG_INFO(Render_Vulkan, "XeSS: building its pipelines in the background ({} KiB cached)",
+             data.size() / 1024);
+}
+
+bool XessUpscaler::PipelinesReady() {
+    if (!building_pipelines) {
+        return true;
+    }
+    const xess_result_t status =
+        api->get_pipeline_build_status(static_cast<xess_context_handle_t>(context));
+    if (status == XESS_RESULT_ERROR_OPERATION_IN_PROGRESS) {
+        if (!logged_waiting) {
+            logged_waiting = true;
+            LOG_INFO(Render_Vulkan, "XeSS: pipelines still building; FSR 3.1 draws until then");
+        }
+        return false;
+    }
+    building_pipelines = false;
+    LOG_INFO(Render_Vulkan, "XeSS: pipelines built in {:.0f} ms (status {})",
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                       build_begin)
+                 .count(),
+             static_cast<int>(status));
+    SavePipelineCache();
+    return true;
+}
+
+void XessUpscaler::SavePipelineCache() {
+    if (!pipeline_cache) {
+        return;
+    }
+    size_t size = 0;
+    if (pipeline_cache.Read(&size, nullptr) != VK_SUCCESS || size == 0) {
+        return;
+    }
+    std::vector<u8> data(size);
+    if (pipeline_cache.Read(&size, data.data()) != VK_SUCCESS) {
+        return;
+    }
+    data.resize(size);
+    const auto path = PipelineCachePath();
+    void(Common::FS::CreateParentDirs(path));
+    Common::FS::IOFile file{path, Common::FS::FileAccessMode::Write,
+                            Common::FS::FileType::BinaryFile};
+    if (file.IsOpen() && file.WriteSpan(std::span<const u8>{data}) == data.size()) {
+        LOG_INFO(Render_Vulkan, "XeSS: pipeline cache saved ({} KiB)", data.size() / 1024);
+    }
+}
 
 bool XessUpscaler::ResponsiveMaskWanted() {
     static const bool wanted = [] {
@@ -151,11 +274,15 @@ XessUpscaler::XessUpscaler(const Device& device_, Scheduler& scheduler_,
              xmx ? fmt::format("XMX path (XeFX {}.{}.{})", xefx.major, xefx.minor, xefx.patch)
                  : std::string{"DP4a path"},
              optimal ? "" : ", the driver is older than XeSS recommends");
+    StartPipelineBuild();
 }
 
 XessUpscaler::~XessUpscaler() {
     if (context != nullptr) {
         scheduler.Finish(); // recorded evaluations may still use it
+        if (!building_pipelines) {
+            SavePipelineCache();
+        }
         api->destroy_context(static_cast<xess_context_handle_t>(context));
     }
 }
@@ -166,18 +293,15 @@ bool XessUpscaler::Init(VkExtent2D render_size, VkExtent2D upscale_size) {
     xess_vk_init_params_t params{};
     params.outputResolution = {upscale_size.width, upscale_size.height};
     params.qualitySetting = quality;
-    // Tonemapped colour, standard depth, render-size motion vectors in pixels.
-    params.initFlags = XESS_INIT_FLAG_LDR_INPUT_COLOR;
-    // lichii-arc: the automatic responsive mask (vk_ocarina_camera_motion.cpp) comes every frame.
-    if (ResponsiveMaskWanted()) {
-        params.initFlags |= XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
-    }
+    params.initFlags = InitFlags();
     params.creationNodeMask = 1;
     params.visibleNodeMask = 1;
     params.tempBufferHeap = VK_NULL_HANDLE;
     params.tempTextureHeap = VK_NULL_HANDLE;
-    params.pipelineCache = VK_NULL_HANDLE;
+    // The same cache xessVKBuildPipelines got (XeSS requires it), or none.
+    params.pipelineCache = pipeline_cache ? *pipeline_cache : VK_NULL_HANDLE;
     const auto handle = static_cast<xess_context_handle_t>(context);
+    Common::LichiiDiag::NoteEvent("xess_init");
     const xess_result_t result = api->init(handle, &params);
     if (result != XESS_RESULT_SUCCESS) {
         LOG_ERROR(Render_Vulkan, "XeSS: xessVKInit {}x{} -> {}x{} failed ({}); using FSR 3.1",
@@ -248,6 +372,10 @@ bool XessUpscaler::Upscale(const Inputs& in) {
                          render_extent.height != in.render_size.height ||
                          upscale_extent.width != in.upscale_size.width ||
                          upscale_extent.height != in.upscale_size.height;
+    if (resized && !PipelinesReady()) {
+        // lichii-arc: XeSS's pipelines are still building in the background (FSR 3.1 draws).
+        return false;
+    }
     if (resized) {
         if (!Init(in.render_size, in.upscale_size)) {
             failed = true;

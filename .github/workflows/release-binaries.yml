@@ -19,6 +19,8 @@ on:
       - gpl-arc
       - invent-e
       - invent-h
+      - invent-x
+      - invent-efhx
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"
