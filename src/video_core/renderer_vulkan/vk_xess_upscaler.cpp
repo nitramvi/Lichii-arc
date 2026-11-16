@@ -18,6 +18,7 @@
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/lichii_diag.h"
 #include "common/logging.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_xess_upscaler.h"
@@ -300,6 +301,7 @@ bool XessUpscaler::Init(VkExtent2D render_size, VkExtent2D upscale_size) {
     // The same cache xessVKBuildPipelines got (XeSS requires it), or none.
     params.pipelineCache = pipeline_cache ? *pipeline_cache : VK_NULL_HANDLE;
     const auto handle = static_cast<xess_context_handle_t>(context);
+    Common::LichiiDiag::NoteEvent("xess_init");
     const xess_result_t result = api->init(handle, &params);
     if (result != XESS_RESULT_SUCCESS) {
         LOG_ERROR(Render_Vulkan, "XeSS: xessVKInit {}x{} -> {}x{} failed ({}); using FSR 3.1",

@@ -7,6 +7,9 @@
 #include <chrono>
 #include <thread>
 
+#include <fmt/format.h>
+
+#include "common/lichii_diag.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/file_sys/common_funcs.h"
@@ -50,6 +53,11 @@ Result IStorage::Read(
 
     R_UNLESS(length >= 0, FileSys::ResultInvalidSize);
     R_UNLESS(offset >= 0, FileSys::ResultInvalidOffset);
+    // lichii-arc: LICHII_DIAG — large reads of the game's data storage (RomFS) are loads.
+    if (length >= 64 * 1024 && Common::LichiiDiag::Enabled()) {
+        Common::LichiiDiag::NoteFileOpened(
+            fmt::format("almacenamiento+{:#x} ({} KiB)", offset, length / 1024));
+    }
 
     if (bytes_per_second > 0) {
         const auto now = std::chrono::steady_clock::now();

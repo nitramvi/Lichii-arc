@@ -20,6 +20,7 @@
 #include <fstream>
 #endif
 
+#include "common/lichii_diag.h"
 #include "common/logging.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/nx2_stutter_trace.h"
@@ -225,6 +226,12 @@ void Summarize(FrameState& state, u64 now) {
              categories, state.window_graphics_builds, state.window_compute_builds, lookups,
              driver_builds, CacheFileBytes(), sites.empty() ? "none" : sites,
              JitText(state.window_jit), JitCacheText());
+    if (Common::LichiiDiag::Enabled()) {
+        // lichii-arc: sampled GPU busy time per frame (about one frame a second).
+        LOG_INFO(HW_GPU, "LICHII_GPU window_s={:.2f} {}",
+                 static_cast<double>(now - state.window_start_ns) / 1e9,
+                 Common::LichiiDiag::TakeGpuSummary());
+    }
     state.window_jit = {};
     state.window_start_ns = now;
     state.window_frames = 0;
@@ -380,6 +387,38 @@ Attribution Attribute(const ThreadTicks& ticks, const std::array<bool, ThreadCou
     return result;
 }
 
+/// lichii-arc: LICHII_HITCH's cause in plain words, from the frame's categories and sites.
+static std::string PlainHitchCause(const Attribution& frame, const std::array<double, SiteCount>& site_ms,
+                            std::string_view events) {
+    if (events.find("xess") != std::string_view::npos) {
+        return "XeSS (arranque del escalador)";
+    }
+    // The largest of the categories, other time and the memory sites.
+    std::string_view cause = "emulacion/CPU";
+    double best = frame.other_ms;
+    const auto consider = [&](double ms, std::string_view name) {
+        if (ms > best) {
+            best = ms;
+            cause = name;
+        }
+    };
+    consider(frame.category_ms[static_cast<size_t>(Category::GraphicsMiss)] +
+                 frame.category_ms[static_cast<size_t>(Category::ShaderCapture)],
+             "pipeline (shader de dibujo nuevo)");
+    consider(frame.category_ms[static_cast<size_t>(Category::ComputeMiss)],
+             "compute (shader de calculo nuevo)");
+    consider(frame.category_ms[static_cast<size_t>(Category::PipelineWait)],
+             "pipeline (esperando que termine de compilar)");
+    consider(frame.category_ms[static_cast<size_t>(Category::TextureCache)], "textura");
+    consider(frame.category_ms[static_cast<size_t>(Category::BufferCache)], "buffers");
+    consider(frame.category_ms[static_cast<size_t>(Category::QueryFence)], "GPU (esperando a la GPU)");
+    consider(frame.category_ms[static_cast<size_t>(Category::Present)], "presentacion");
+    consider(site_ms[static_cast<size_t>(Site::MemoryAllocate)] +
+                 site_ms[static_cast<size_t>(Site::MemoryFree)],
+             "memoria de video");
+    return fmt::format("{} {:.0f} ms", cause, best);
+}
+
 void OnPresent() {
     auto& state = g_frame;
     const u64 now = Nx2Profile::Now();
@@ -413,6 +452,7 @@ void OnPresent() {
     state.last_ticks = now_ticks;
     if (++state.frames == 1) {
         BootMarker("first_frame");
+        Common::LichiiDiag::StartTelemetry();
         state.window_start_ns = now;
         for (size_t index = 0; index < LookupCount; ++index) {
             state.lookups[index] = g_totals.lookups[index].load(std::memory_order_relaxed);
@@ -456,6 +496,7 @@ void OnPresent() {
     state.window_graphics_builds += graphics_builds;
     state.window_compute_builds += compute_builds;
     state.window_jit += frame_jit;
+    std::array<double, SiteCount> frame_site_ms{};
     std::string sites;
     for (size_t index = 0; index < SiteCount; ++index) {
         // Ticks and count are separate atomics: a run can land in one frame's ticks and the next
@@ -466,6 +507,7 @@ void OnPresent() {
             continue;
         }
         const double ms = static_cast<double>(delta) * ms_per_tick;
+        frame_site_ms[index] = ms;
         state.window_site_counts[index] += count;
         state.window_site_ms[index] += ms;
         sites += fmt::format("{}{}:{}x{:.1f}", sites.empty() ? "" : ",", site_names[index], count, ms);
@@ -476,6 +518,22 @@ void OnPresent() {
         long_sites.swap(g_long_sites);
     }
 
+    if (Common::LichiiDiag::Enabled()) {
+        if (const u32 mark = Common::LichiiDiag::TakePendingMark(); mark != 0) {
+            LOG_INFO(HW_GPU, "LICHII_MARK {} frame={} ms={:.1f} last_file={}", mark,
+                     state.frames, interval_ms, Common::LichiiDiag::LastFileOpened());
+        }
+        const std::string events = Common::LichiiDiag::TakeEvents();
+        if (interval_ms > 100.0) {
+            const double since_file = Common::LichiiDiag::SecondsSinceFileOpened();
+            LOG_INFO(HW_GPU, "LICHII_HITCH frame={} ms={:.0f} causa={}{} ultimo_archivo={} "
+                             "hace_s={:.1f}{}{}",
+                     state.frames, interval_ms, PlainHitchCause(frame, frame_site_ms, events),
+                     since_file < interval_ms / 1000.0 + 1.0 ? " (durante una carga)" : "",
+                     Common::LichiiDiag::LastFileOpened(), since_file < 1e8 ? since_file : -1.0,
+                     events.empty() ? "" : " eventos=", events);
+        }
+    }
     if (interval_ms > StutterMs) {
         std::string fields;
         for (size_t index = 0; index < IdleIndex; ++index) {
