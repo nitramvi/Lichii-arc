@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <optional>
 
@@ -55,6 +56,12 @@ public:
     /// lichii-arc: LICHII_OOT_AUTO_MASK=1 (the context then takes a responsive mask every frame).
     [[nodiscard]] static bool ResponsiveMaskWanted();
 
+    /// lichii-arc: LICHII_XESS_EARLY_INIT=1 builds XeSS's pipelines in the background as soon as
+    /// the context exists (with a pipeline cache kept on disk), instead of inside the first
+    /// xessVKInit, which stalled the first upscaled frame for seconds on an Arc 140V. Until they
+    /// are built, Upscale returns false and FSR 3.1 draws those frames.
+    [[nodiscard]] static bool EarlyInitWanted();
+
     /// Throws vk::Exception when XeSS can't start: the runtime is missing or rejects the device.
     explicit XessUpscaler(const Device& device, Scheduler& scheduler,
                           MemoryAllocator& memory_allocator);
@@ -74,6 +81,11 @@ public:
 private:
     bool Init(VkExtent2D render_size, VkExtent2D upscale_size);
     void CreateOutput(VkExtent2D upscale_size);
+    [[nodiscard]] u32 InitFlags() const;
+    void StartPipelineBuild();
+    /// Whether the background build is finished (true when there was none).
+    [[nodiscard]] bool PipelinesReady();
+    void SavePipelineCache();
 
     const Device& device;
     Scheduler& scheduler;
@@ -85,6 +97,10 @@ private:
     vk::Image output_image;
     vk::ImageView output_view;
     std::atomic<bool> failed{};
+    vk::PipelineCache pipeline_cache; ///< LICHII_XESS_EARLY_INIT's cache, saved on destruction
+    bool building_pipelines{};
+    bool logged_waiting{};
+    std::chrono::steady_clock::time_point build_begin{};
 };
 
 } // namespace Vulkan
