@@ -3699,7 +3699,7 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
             color.range == VideoCommon::SubresourceRange{},
             target.range == VideoCommon::SubresourceRange{},
             color.ImageHandle() == target.ImageHandle(),
-            depth.ImageHandle() == target.ImageHandle(), upscale_hash);
+            depth.ImageHandle() == target.ImageHandle(), pipeline.ShaderHash());
         if (detail != last_detail) {
             last_detail = detail;
             LOG_INFO(Render_Vulkan, "Ocarina temporal: unexpected upscale images: {}", detail);

@@ -3107,7 +3107,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreatePrecompiledGraphicsPipeli
         spirv_blobs[stage] = precompiled_info_blobs[record.spirv[stage]];
     }
     if (kept_spirv) {
-        auto build_kept = [this, key = graphics_key, path = precompiled_infos_path,
+        auto build_kept = [key = graphics_key, path = precompiled_infos_path,
                            generation = kept_infos_generation.load(std::memory_order_acquire),
                            spirv_blobs, present] {
             std::array<std::vector<u32>, Maxwell::MaxShaderStage> modules;
