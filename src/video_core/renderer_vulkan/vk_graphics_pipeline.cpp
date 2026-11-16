@@ -587,7 +587,8 @@ GraphicsPipeline::GraphicsPipeline(
                 stage_templates[stage] =
                     stage_builder.CreateTemplate(set_layouts[stage], VK_NULL_HANDLE, false);
                 stage_allocators[stage] = descriptor_pool.Allocator(
-                    device, scheduler, set_layouts[stage], stage_infos[stage]);
+                    device, scheduler, set_layouts[stage], stage_infos[stage],
+                    stage_builder.UsesUpdateAfterBindPool());
             }
         }
         pipeline_layout =

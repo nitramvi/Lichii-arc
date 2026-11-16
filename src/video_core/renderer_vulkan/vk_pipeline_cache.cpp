@@ -615,18 +615,6 @@ std::vector<u32> EmitStageSpirv(const Device& device, const Shader::Profile& pro
     return code;
 }
 
-/// A graphics stage's module (graphics warm-up and pipeline libraries).
-vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& profile,
-                                  const Shader::RuntimeInfo& runtime_info,
-                                  Shader::IR::Program& program,
-                                  Shader::Backend::Bindings& binding, u64 shader_hash,
-                                  size_t stage_index, std::span<const u32> reference = {},
-                                  u128* spirv_hash = nullptr) {
-    return BuildShader(device, EmitStageSpirv(device, profile, runtime_info, program, binding,
-                                              shader_hash, stage_index, reference, nullptr,
-                                              spirv_hash));
-}
-
 // Graphics pipeline libraries (EDEN_NX2_GPL): each stage's resources go to its own descriptor
 // set (set index = stage index) with bindings from 0, and the fragment stage's rescaling bits
 // start at fixed indices, so a stage's SPIR-V does not depend on the other stages' resources.
