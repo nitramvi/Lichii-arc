@@ -47,6 +47,8 @@ add_library(
     display_hdr.h
     div_ceil.h
     dkb_cpu_trace.cpp
+    game_file_trace.cpp
+    game_file_trace.h
     dkb_cpu_trace.h
     jit_symbols.cpp
     jit_symbols.h

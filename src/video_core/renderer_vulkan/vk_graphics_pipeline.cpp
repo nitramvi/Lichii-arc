@@ -30,6 +30,7 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
+#include "video_core/shader_provenance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_binaries.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -866,6 +867,9 @@ GraphicsPipeline::GraphicsPipeline(
                          "Nx2Perf async_pipelines: {:016x} worker emission and driver build {:.1f} ms",
                          key.Hash(), std::chrono::duration<double, std::milli>(elapsed).count());
             }
+            VideoCommon::ShaderProvenance::NoteSlowBuild(
+                VideoCommon::ShaderProvenance::Kind::Graphics, key.Hash(),
+                std::chrono::duration<double, std::milli>(elapsed).count());
         }
     }};
     std::array<bool, NUM_STAGES> present_stages{};

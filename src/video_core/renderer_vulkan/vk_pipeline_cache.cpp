@@ -75,6 +75,8 @@
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_binaries.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "common/game_file_trace.h"
+#include "video_core/shader_provenance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache_records.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_cache_v2.h"
@@ -1491,6 +1493,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         LOG_ERROR(Common_Filesystem, "Failed to create pipeline cache directories");
         return;
     }
+    VideoCommon::ShaderProvenance::Open(base_dir);
     namespace CacheV2 = VideoCommon::ShaderCacheV2;
     pipeline_cache_filename = base_dir / CacheV2::FileName;
     // Left by a boot load that never finished (a driver crash, abort or hang): this boot builds
@@ -1633,7 +1636,73 @@ void PipelineCache::ReturnPools(std::shared_ptr<ShaderPools> pools) {
 }
 
 void PipelineCache::StopBackgroundJobs() {
+    StopZonePrewarm();
     scheduled_prebuild.reset();
+}
+
+void PipelineCache::StopZonePrewarm() {
+    if (!zone_prewarm) {
+        return;
+    }
+    Common::GameFileTrace::SetListener({});
+    std::scoped_lock lock{zone_prewarm->mutex};
+    if (zone_prewarm->queued != 0 || !zone_prewarm->records.empty()) {
+        LOG_INFO(Render_Vulkan, "lichii-arc zone prewarm: {} pipelines queued this session, {} "
+                 "cached records left",
+                 zone_prewarm->queued, zone_prewarm->records.size());
+    }
+    zone_prewarm->active = false;
+    zone_prewarm->cache = nullptr;
+    zone_prewarm->records.clear();
+    zone_prewarm.reset();
+}
+
+void PipelineCache::OnGameFile(const std::shared_ptr<ZoneState>& zone, const std::string& file) {
+    const std::vector<u64> hashes = VideoCommon::ShaderProvenance::GraphicsFor(file);
+    if (hashes.empty()) {
+        return;
+    }
+    std::scoped_lock lock{zone->mutex};
+    PipelineCache* const cache = zone->cache;
+    if (!zone->active || cache == nullptr || !cache->scheduled_prebuild) {
+        return;
+    }
+    size_t queued = 0;
+    for (const u64 hash : hashes) {
+        const auto it = zone->records.find(hash);
+        if (it == zone->records.end()) {
+            continue;
+        }
+        ZoneRecord record = std::move(it->second);
+        zone->records.erase(it);
+        const GraphicsPipelineCacheKey key = record.key;
+        const u64 cpu_bytes = TranslationBytes(record.payload_size);
+        const bool added = cache->scheduled_prebuild->Add(
+            key, cpu_bytes, DriverCompileBytes, [cache, record = std::move(record)]() mutable {
+                if (record.payload.empty()) {
+                    auto read = VideoCommon::ShaderCacheV2::ReadRecordPayload(
+                        cache->cache_v2->Writer().File(), VideoCommon::ShaderCacheV2::RecordKind::Graphics, record.record_key,
+                        record.offset, record.payload_size);
+                    if (!read) {
+                        return std::unique_ptr<GraphicsPipeline>{};
+                    }
+                    record.payload = std::move(*read);
+                }
+                bool incomplete{};
+                try {
+                    return cache->TranslateCachedGraphics(record.payload, record.key, nullptr,
+                                                          incomplete);
+                } catch (const std::ios_base::failure&) {
+                    return std::unique_ptr<GraphicsPipeline>{};
+                }
+            });
+        queued += added ? 1 : 0;
+    }
+    zone->queued += queued;
+    if (queued != 0) {
+        LOG_INFO(Render_Vulkan, "lichii-arc zone prewarm: {} pipelines queued on reading {}",
+                 queued, file);
+    }
 }
 
 // Set while this thread translates a cached graphics record: CreateGraphicsPipeline drops one
@@ -1983,12 +2052,44 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     for (size_t older = 0; older < older_admitted; ++older) {
         prebuild.push_back(prebuild_record(older_used[older].index, older_used[older].key));
     }
+    // lichii-arc zone prewarm: every record the boot and the prebuild leave for its first draw.
+    std::vector<std::pair<size_t, GraphicsPipelineCacheKey>> zone_candidates;
+    if (VideoCommon::ShaderProvenance::ZonePrewarm()) {
+        for (size_t older = older_admitted; older < older_used.size(); ++older) {
+            zone_candidates.emplace_back(older_used[older].index, older_used[older].key);
+        }
+        zone_candidates.insert(zone_candidates.end(), skipped_graphics.begin(),
+                               skipped_graphics.end());
+    }
     older_used.clear();
     for (const auto& [index, key] :
          NewestFirst(std::move(skipped_graphics), prebuild_limit - older_admitted)) {
         prebuild.push_back(prebuild_record(index, key));
     }
 
+    std::shared_ptr<ZoneState> zone_state;
+    if (!zone_candidates.empty()) {
+        std::unordered_set<u64> admitted;
+        for (const auto& record : prebuild) {
+            admitted.insert(record.key.Hash());
+        }
+        zone_state = std::make_shared<ZoneState>();
+        for (const auto& [index, key] : zone_candidates) {
+            const u64 hash = key.Hash();
+            if (admitted.contains(hash)) {
+                continue;
+            }
+            PrebuildRecord record = prebuild_record(index, key);
+            zone_state->records.try_emplace(hash, ZoneRecord{
+                                                      .key = record.key,
+                                                      .record_key = record.record_key,
+                                                      .offset = record.offset,
+                                                      .payload_size = record.payload_size,
+                                                      .payload = std::move(record.payload),
+                                                  });
+        }
+        zone_candidates.clear();
+    }
     for (auto& [key, indices] : compute_keys) {
         ++state.total;
         u64 bytes = 0;
@@ -2287,6 +2388,20 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
     }
     if (compact) {
         scheduled_prebuild->AfterTranslations([this] { cache_v2->Writer().Compact(); });
+    }
+    if (zone_state && !zone_state->records.empty()) {
+        {
+            std::scoped_lock lock{zone_state->mutex};
+            zone_state->cache = this;
+            zone_state->active = true;
+        }
+        zone_prewarm = zone_state;
+        LOG_INFO(Render_Vulkan,
+                 "lichii-arc zone prewarm: {} cached graphics records left for their first draw "
+                 "wait for the game files earlier sessions tied to them",
+                 zone_state->records.size());
+        Common::GameFileTrace::SetListener(
+            [zone = std::move(zone_state)](const std::string& file) { OnGameFile(zone, file); });
     }
 }
 

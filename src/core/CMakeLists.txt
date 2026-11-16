@@ -672,6 +672,8 @@ add_library(core STATIC
     hle/service/filesystem/fsp/fs_i_storage.h
     hle/service/filesystem/fsp/fs_read_trace.cpp
     hle/service/filesystem/fsp/fs_read_trace.h
+    hle/service/filesystem/fsp/fs_romfs_trace.cpp
+    hle/service/filesystem/fsp/fs_romfs_trace.h
     hle/service/filesystem/fsp/fsp_ldr.cpp
     hle/service/filesystem/fsp/fsp_ldr.h
     hle/service/filesystem/fsp/fsp_pr.cpp

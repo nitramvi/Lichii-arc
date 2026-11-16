@@ -64,6 +64,7 @@ Result IStorage::Read(
     // Read the data from the Storage backend
     const ReadTraceScope trace{ReadTraceSource::Storage, length};
     backend->Read(out_bytes.data(), length, offset);
+    romfs_trace.OnRead(backend, static_cast<u64>(offset));
 
     R_SUCCEED();
 }

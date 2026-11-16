@@ -352,6 +352,8 @@ add_library(video_core STATIC
     shader_jobs.cpp
     shader_jobs.h
     shader_notify.cpp
+    shader_provenance.cpp
+    shader_provenance.h
     shader_notify.h
     shader_stage_translation.cpp
     shader_stage_translation.h

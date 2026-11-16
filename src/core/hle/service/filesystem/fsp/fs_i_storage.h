@@ -10,6 +10,7 @@
 #include "core/file_sys/vfs/vfs.h"
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/filesystem/filesystem.h"
+#include "core/hle/service/filesystem/fsp/fs_romfs_trace.h"
 #include "core/hle/service/service.h"
 
 namespace Service::FileSystem {
@@ -20,6 +21,7 @@ public:
 
 private:
     FileSys::VirtualFile backend;
+    RomfsReadTrace romfs_trace;
 
     static constexpr s64 ReadBytesPerSecond = 40'000'000;
     static constexpr u64 AgeOfImprisonmentProgramId = 0x04003F40232DE000ULL;
