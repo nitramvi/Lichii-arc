@@ -802,7 +802,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       use_asynchronous_shaders{Settings::values.use_asynchronous_shaders.GetValue()},
       use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue() &&
                                 !device_.DriverCachesPipelines()},
-      serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Background) {
+      serialization_thread(1, "VkPipelineSerialization", {}, Common::ThreadPlacement::Speculative) {
     // A sixty-fourth of the RAM (16 GB: 256 MB), about 25 KB per evicted pipeline
     const u64 ram = Common::GetMemInfo().TotalPhysicalMemory;
     kept_stages = decltype(kept_stages){ram != 0 ? ram / 64 : u64{256} << 20};
@@ -6000,6 +6000,8 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
                   Common::FS::PathToUTF8String(temporary));
         return;
     }
+    const auto write_begin_outer = std::chrono::steady_clock::now();
+    size_t cache_size_written = 0;
     try {
         file.exceptions(std::ifstream::failbit);
         file.write(VULKAN_CACHE_MAGIC_NUMBER.data(), VULKAN_CACHE_MAGIC_NUMBER.size())
@@ -6009,6 +6011,25 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
         std::vector<char> cache_data;
         if (pipeline_cache) {
             pipeline_cache.Read(&cache_size, nullptr);
+            // lichii-arc: LICHII_BIG_PIPELINE_CACHE=1 skips writing a cache that did not grow.
+            // On Intel's Windows driver the cache of a prepared title is gigabytes (5 GB for
+            // Ocarina of Time's 120,000 precompiled pipelines), and rewriting it at every exit
+            // kept the emulator shutting down for 10-20 s.
+            static const bool skip_unchanged = [] {
+                const char* value = std::getenv("LICHII_BIG_PIPELINE_CACHE");
+                return value != nullptr && value[0] == '1';
+            }();
+            const size_t on_disk = vulkan_cache_bytes_on_disk.load();
+            if (skip_unchanged && on_disk != 0 && cache_size == on_disk &&
+                std::filesystem::exists(filename)) {
+                file.close();
+                std::error_code remove_error;
+                std::filesystem::remove(temporary, remove_error);
+                LOG_INFO(Render_Vulkan,
+                         "Vulkan driver pipeline cache unchanged ({} MiB), not written again",
+                         cache_size >> 20);
+                return;
+            }
             cache_data.resize(cache_size);
             pipeline_cache.Read(&cache_size, cache_data.data());
         }
@@ -6022,6 +6043,7 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
             Common::NoteShutdownProgress();
         }
         file.close();
+        cache_size_written = cache_size;
     } catch (const std::ios_base::failure& e) {
         // The cache stays as it was: only the file being written goes.
         LOG_ERROR(Common_Filesystem, "{}", e.what());
@@ -6040,8 +6062,11 @@ void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
         return;
     }
 
-    LOG_INFO(Render_Vulkan, "Vulkan driver pipelines cached at: {}",
-             Common::FS::PathToUTF8String(filename));
+    vulkan_cache_bytes_on_disk.store(cache_size_written);
+    LOG_INFO(Render_Vulkan, "Vulkan driver pipelines cached at: {} ({} MiB in {:.1f} s)",
+             Common::FS::PathToUTF8String(filename), cache_size_written >> 20,
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - write_begin_outer)
+                 .count());
 }
 
 vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::path& filename,
@@ -6098,8 +6123,9 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
         std::vector<char> cache_data(cache_size);
         file.read(cache_data.data(), cache_size);
 
-        LOG_INFO(Render_Vulkan,
-                 "Loaded Vulkan driver pipeline cache: {}", Common::FS::PathToUTF8String(filename));
+        LOG_INFO(Render_Vulkan, "Loaded Vulkan driver pipeline cache: {} ({} MiB)",
+                 Common::FS::PathToUTF8String(filename), cache_size >> 20);
+        vulkan_cache_bytes_on_disk.store(cache_size);
 
         try {
             return create_pipeline_cache(cache_size, cache_data.data());

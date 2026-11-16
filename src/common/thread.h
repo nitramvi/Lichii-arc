@@ -129,6 +129,9 @@ enum class ThreadPlacement : u32 {
     Default = 0,
     Background = 1,
     Efficiency = 2,
+    /// lichii-arc: work nothing waits on yet (optimized rebuilds, prewarming, cache writes).
+    /// Same as Background unless LICHII_ECORE_COMPILE is set (see SetCurrentThreadToSpeculativeWork).
+    Speculative = 3,
 };
 
 void SetCurrentThreadPriority(ThreadPriority new_priority);
@@ -137,6 +140,14 @@ void SetCurrentThreadToPerformanceCores();
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();
+
+/// lichii-arc: places a thread doing work nothing waits on yet (optimized pipeline rebuilds, zone
+/// prewarming, cache serialization). Without LICHII_ECORE_COMPILE it is
+/// SetCurrentThreadToBackgroundWork. With LICHII_ECORE_COMPILE=1 (Windows) the thread is kept on
+/// the efficiency cores, also on CPUs with too few performance cores for the hybrid placement
+/// (Core Ultra 7 258V: 4 P + 4 LP E), leaving the performance cores to the emulated CPU, the GPU
+/// threads and presentation; =2 also marks it EcoQoS. A no-op without efficiency cores.
+void SetCurrentThreadToSpeculativeWork();
 
 enum class PinnedRole : u32 { GpuFront, GpuBack, GuestCore };
 
