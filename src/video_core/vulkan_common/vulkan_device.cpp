@@ -1823,6 +1823,17 @@ bool Device::GetSuitability(bool requires_swapchain) {
         portability_subset_features.sType = PORTABILITY_SUBSET_FEATURES_STYPE;
         SetNext(next, portability_subset_features);
     }
+    // lichii-arc: LICHII_SMART_FAST=1 asks whether the driver can answer "is this pipeline in
+    // your cache?" without compiling it (core in Vulkan 1.3).
+    pipeline_creation_cache_control_requested = [this] {
+        const char* value = std::getenv("LICHII_SMART_FAST");
+        return value && value[0] == '1' && instance_version >= VK_API_VERSION_1_3;
+    }();
+    if (pipeline_creation_cache_control_requested) {
+        pipeline_creation_cache_control_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES;
+        SetNext(next, pipeline_creation_cache_control_features);
+    }
     if (graphics_pipeline_library_requested) {
         graphics_pipeline_library_features.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT;

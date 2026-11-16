@@ -502,20 +502,24 @@ private:
     /// The fixed-function state of the pipeline (shared by the monolithic and library builds).
     void FillStates(PipelineStates& states) const;
 
-    vk::Pipeline MakePipeline(VkRenderPass render_pass, bool fast);
+    vk::Pipeline MakePipeline(VkRenderPass render_pass, bool fast, bool probe = false);
 
     /// Library build (EDEN_NX2_GPL): gets or builds the two shader libraries, then (unless
     /// libraries_only) links them with this pipeline's vertex input and fragment output parts.
     /// False when a library failed; the caller then builds the pipeline the monolithic way.
     bool MakeLibraryPipeline(VkRenderPass render_pass);
 
+    /// FillStates with the values of the draw's dynamic states zeroed, as libraries are keyed.
+    void FillLibraryStates(PipelineStates& states) const;
     GplLibrary MakeShaderLibrary(GplPart part, const PipelineStates& states,
-                                 VkRenderPass render_pass) const;
+                                 VkRenderPass render_pass, bool allow_fast = true) const;
 
     std::string ShaderLibraryKey(GplPart part, const PipelineStates& states,
                                  VkRenderPass render_pass) const;
 
-    vk::Pipeline LinkLibraries(VkRenderPass render_pass, bool optimized);
+    vk::Pipeline LinkLibraries(
+        VkRenderPass render_pass, bool optimized,
+        const std::array<std::shared_ptr<const GplLibrary>, 2>* libraries_override = nullptr);
 
     /// The library route failed: per-stage sets kept, with a layout a monolithic pipeline takes.
     void FallBackToMonolithic(VkRenderPass render_pass);
@@ -617,6 +621,8 @@ private:
     std::array<size_t, NUM_STAGES> stage_descriptor_offsets{}; ///< Bytes into the update data
     bool has_stage_sets{};
     std::array<std::shared_ptr<const GplLibrary>, 2> shader_libraries;
+    /// lichii-arc LICHII_SMART_FAST: the optimized libraries of optimized_pipeline.
+    std::array<std::shared_ptr<const GplLibrary>, 2> smart_libraries;
     vk::Pipeline vertex_input_library;
     vk::Pipeline fragment_output_library;
     vk::DescriptorSetLayout fallback_empty_set_layout;

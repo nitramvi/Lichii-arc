@@ -780,12 +780,79 @@ GraphicsPipeline::GraphicsPipeline(
                             std::move(link));
                     }
                 }
-                // The libraries hold the shaders now (the fallback has used them too).
-                for (vk::ShaderModule& module : spv_modules) {
-                    module.reset();
+                // lichii-arc LICHII_SMART_FAST: a library the driver's cache did not have was
+                // built unoptimized; build the optimized ones on a Background job and link them
+                // (fast link, as the libraries the warm-up builds) into the pipeline that takes
+                // this one's place at a later draw (ConfigureDraw). The modules stay until then.
+                bool smart_optimize = false;
+                if (made && !libraries_only && !optimized_build && build_jobs &&
+                    std::ranges::any_of(shader_libraries, [](const auto& library) {
+                        return library && library->unoptimized;
+                    })) {
+                    smart_optimize = true;
+                    optimized_build.emplace(
+                        PipelineBuildQueue{
+                            .jobs = build_jobs,
+                            .priority = VideoCommon::ShaderJobPriority::Background,
+                        },
+                        [this, render_pass] {
+                        const auto begin = std::chrono::steady_clock::now();
+                        try {
+                            PipelineStates library_states;
+                            FillLibraryStates(library_states);
+                            static constexpr std::array smart_parts{GplPart::PreRasterization,
+                                                                    GplPart::Fragment};
+                            std::array<std::shared_ptr<const GplLibrary>, 2> optimized_libraries =
+                                shader_libraries;
+                            for (size_t index = 0; index < smart_parts.size(); ++index) {
+                                if (shader_libraries[index] && shader_libraries[index]->unoptimized) {
+                                    optimized_libraries[index] = std::make_shared<const GplLibrary>(
+                                        MakeShaderLibrary(smart_parts[index], library_states,
+                                                          render_pass, false));
+                                }
+                            }
+                            optimized_pipeline =
+                                LinkLibraries(render_pass, false, &optimized_libraries);
+                            smart_libraries = std::move(optimized_libraries);
+                            optimized_ready.store(true, std::memory_order_release);
+                        } catch (const vk::Exception& exception) {
+                            LOG_WARNING(Render_Vulkan,
+                                        "Nx2Perf smart_fast: {:016x} optimized libraries failed: {}",
+                                        key.Hash(), exception.what());
+                        }
+                        for (vk::ShaderModule& module : spv_modules) {
+                            module.reset();
+                        }
+                        const double ms = std::chrono::duration<double, std::milli>(
+                                              std::chrono::steady_clock::now() - begin)
+                                              .count();
+                        static std::atomic<u32> logged{};
+                        if (ms > 100.0 || logged.fetch_add(1) < 200) {
+                            LOG_INFO(Render_Vulkan,
+                                     "Nx2Perf smart_fast: {:016x} optimized libraries and link "
+                                     "{:.1f} ms in the background",
+                                     key.Hash(), ms);
+                        }
+                    });
                 }
-            } else if (FastFirstBuildEnabled() && worker_only_build && build_jobs &&
-                       !mesh_emulation) {
+                // The libraries hold the shaders now (the fallback has used them too).
+                if (!smart_optimize) {
+                    for (vk::ShaderModule& module : spv_modules) {
+                        module.reset();
+                    }
+                }
+            } else if (SmartFastBuildEnabled() && device.IsPipelineCreationCacheControlEnabled() &&
+                       worker_only_build && build_jobs && !mesh_emulation &&
+                       (pipeline = MakePipeline(render_pass, false, true))) {
+                // lichii-arc LICHII_SMART_FAST: the driver's cache had the optimized pipeline.
+                static std::atomic<u32> logged{};
+                if (logged.fetch_add(1) < 200) {
+                    LOG_INFO(Render_Vulkan, "Nx2Perf smart_fast: {:016x} found in the driver cache",
+                             key.Hash());
+                }
+            } else if ((FastFirstBuildEnabled() ||
+                        (SmartFastBuildEnabled() && device.IsPipelineCreationCacheControlEnabled())) &&
+                       worker_only_build && build_jobs && !mesh_emulation) {
                 // Mesh emulation builds its compute pipelines inside MakePipeline, so
                 // it is built once.
                 // Draw with the unoptimized pipeline as soon as the driver returns it; the
@@ -2447,7 +2514,7 @@ void GraphicsPipeline::FillStates(PipelineStates& s) const {
 
 /// Builds the monolithic pipeline from every stage module, unoptimized when `fast` is set. Null
 /// for a mesh pipeline on a device without mesh shaders.
-vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast) {
+vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast, bool probe) {
     if (IsMeshPipeline() && !device.IsExtMeshShaderSupported() && !mesh_emulation) {
         return {};
     }
@@ -2577,6 +2644,9 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast)
     if (fast) {
         flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
     }
+    if (probe) {
+        flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+    }
 
     const bool unoptimized = (flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT) != 0;
     const auto trace_begin = std::chrono::steady_clock::now();
@@ -2609,7 +2679,8 @@ vk::Pipeline GraphicsPipeline::MakePipeline(VkRenderPass render_pass, bool fast)
     // A fast first build's unoptimized pipeline stays out of the pipeline binaries: the
     // optimized build that follows is the one kept under the key.
     vk::Pipeline created =
-        binaries && !fast
+        probe ? device.GetLogical().TryCreateGraphicsPipeline(pipeline_ci, *pipeline_cache)
+        : binaries && !fast
             ? binaries->CreateGraphicsPipeline(pipeline_ci, *pipeline_cache, GraphicsRecordKey(key))
             : device.GetLogical().CreateGraphicsPipeline(pipeline_ci, *pipeline_cache);
     TracePipelineBuild("END", "graphics", key.Hash(), key.unique_hashes, unoptimized,
@@ -2757,7 +2828,7 @@ std::string GraphicsPipeline::ShaderLibraryKey(GplPart part, const PipelineState
 
 /// Builds the `part` shader library with its own per-stage set layouts and pipeline layout.
 GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineStates& s,
-                                               VkRenderPass render_pass) const {
+                                               VkRenderPass render_pass, bool allow_fast) const {
     GplLibrary library;
     // The library's own set layouts, identically defined to the linked pipeline's (same
     // signature in the key), so the library outlives the pipeline that built it.
@@ -2810,7 +2881,7 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
             pre_rasterization ? VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT
                               : VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT),
     };
-    library.pipeline = device.GetLogical().CreateGraphicsPipeline({
+    const VkGraphicsPipelineCreateInfo library_create{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &library_ci,
         .flags = LibraryFlags(device),
@@ -2831,17 +2902,54 @@ GplLibrary GraphicsPipeline::MakeShaderLibrary(GplPart part, const PipelineState
         .subpass = 0,
         .basePipelineHandle = nullptr,
         .basePipelineIndex = 0,
-    }, *pipeline_cache);
+    };
+    // lichii-arc LICHII_SMART_FAST: ask the driver's cache first; a library it does not have is
+    // built unoptimized now (several times faster) and optimized in the background by the
+    // pipeline that needed it. Not for warm-up builds, nor with optimized links (their libraries
+    // keep link time optimization info, and the link optimizes anyway).
+    if (allow_fast && !libraries_only && SmartFastBuildEnabled() && !GplOptimizeEnabled() &&
+        device.IsPipelineCreationCacheControlEnabled()) {
+        static std::atomic<u32> hits{};
+        static std::atomic<u32> misses{};
+        VkGraphicsPipelineCreateInfo probe_ci = library_create;
+        probe_ci.flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+        library.pipeline = device.GetLogical().TryCreateGraphicsPipeline(probe_ci, *pipeline_cache);
+        if (library.pipeline) {
+            hits.fetch_add(1, std::memory_order_relaxed);
+            return library;
+        }
+        VkGraphicsPipelineCreateInfo fast_ci = library_create;
+        fast_ci.flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+        const auto begin = std::chrono::steady_clock::now();
+        library.pipeline = device.GetLogical().CreateGraphicsPipeline(fast_ci, *pipeline_cache);
+        library.unoptimized = true;
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - begin)
+                              .count();
+        const u32 missed = misses.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (ms > 50.0 || missed <= 200) {
+            LOG_INFO(Render_Vulkan,
+                     "Nx2Perf smart_fast: {} library not in the driver cache, built unoptimized "
+                     "in {:.1f} ms ({} found, {} built so far)",
+                     part == GplPart::PreRasterization ? "pre-rasterization" : "fragment", ms,
+                     hits.load(std::memory_order_relaxed), missed);
+        }
+        return library;
+    }
+    library.pipeline = device.GetLogical().CreateGraphicsPipeline(library_create, *pipeline_cache);
     return library;
 }
 
 /// Links the vertex input, both shader libraries and the fragment output library into a pipeline,
 /// with link time optimization when `optimized` is set.
-vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool optimized) {
+vk::Pipeline GraphicsPipeline::LinkLibraries(
+    VkRenderPass render_pass, bool optimized,
+    const std::array<std::shared_ptr<const GplLibrary>, 2>* libraries_override) {
+    const auto& shaders = libraries_override ? *libraries_override : shader_libraries;
     const std::array<VkPipeline, 4> libraries{
         *vertex_input_library,
-        *shader_libraries[0]->pipeline,
-        *shader_libraries[1]->pipeline,
+        *shaders[0]->pipeline,
+        *shaders[1]->pipeline,
         *fragment_output_library,
     };
     const VkPipelineLibraryCreateInfoKHR link_ci{
@@ -2883,8 +2991,7 @@ vk::Pipeline GraphicsPipeline::LinkLibraries(VkRenderPass render_pass, bool opti
     return linked_pipeline;
 }
 
-bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
-    PipelineStates states;
+void GraphicsPipeline::FillLibraryStates(PipelineStates& states) const {
     FillStates(states);
     // Values of states the draw sets (those in the dynamic list) are zeroed in the libraries'
     // create info, and so in their keys: pipelines that differ only in them share one shader
@@ -2932,6 +3039,11 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
         states.depth_stencil_ci.minDepthBounds = 0.0f;
         states.depth_stencil_ci.maxDepthBounds = 0.0f;
     }
+}
+
+bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
+    PipelineStates states;
+    FillLibraryStates(states);
     static constexpr std::array parts{GplPart::PreRasterization, GplPart::Fragment};
     bool any_library{};
     for (size_t index = 0; index < parts.size(); ++index) {

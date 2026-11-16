@@ -145,7 +145,7 @@ private:
     /// Builds the pipeline once, on whichever thread gets here first.
     void RunBuild();
     /// The driver object for this shader; `fast` asks for an unoptimized build.
-    vk::Pipeline MakeComputePipeline(bool fast);
+    vk::Pipeline MakeComputePipeline(bool fast, bool probe = false);
 
     const Device& device;
     vk::PipelineCache& pipeline_cache;

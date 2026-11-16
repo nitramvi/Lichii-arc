@@ -66,6 +66,9 @@ struct GplLibrary {
     std::vector<vk::DescriptorSetLayout> set_layouts;
     vk::PipelineLayout layout;
     vk::Pipeline pipeline;
+    /// lichii-arc LICHII_SMART_FAST: built without optimization because the driver's cache did
+    /// not have it; a pipeline linked from it builds the optimized libraries in the background.
+    bool unoptimized{};
 };
 
 /// Bytes of a library key. Only whole scalar values are added, never structs with padding.

@@ -32,6 +32,18 @@ inline bool FastFirstBuildEnabled() {
     return enabled;
 }
 
+/// lichii-arc LICHII_SMART_FAST=1: a pipeline built while the game runs first asks the driver's
+/// cache (VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT): found there, it is used at
+/// once, optimized; not there, it is built as with EDEN_NX2_FAST_FIRST (unoptimized now, the
+/// optimized one in the background). Needs Device::IsPipelineCreationCacheControlEnabled.
+inline bool SmartFastBuildEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_SMART_FAST");
+        return value && value[0] == '1';
+    }();
+    return enabled;
+}
+
 /// EDEN_NX2_HEAVY_SKIP: a native pipeline of at least this many converted instructions (all
 /// stages) has its draws skipped while the driver builds it, instead of holding every draw
 /// behind it. "1" picks 4000; 0 or unset turns it off. In a demanding Switch 2 test title's first

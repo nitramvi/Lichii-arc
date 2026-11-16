@@ -203,7 +203,7 @@ void ComputePipeline::TickUpscalerTrace() {
     }
 }
 
-vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast) {
+vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast, bool probe) {
     const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
         .pNext = nullptr,
@@ -228,6 +228,9 @@ vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast) {
     }
     if (fast || BuildsUnoptimized(device.GetDriverID(), shader_hash)) {
         flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
+    }
+    if (probe) {
+        flags |= VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
     }
     const VkComputePipelineCreateInfo compute_ci{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -259,7 +262,8 @@ vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast) {
     // A fast first build's unoptimized pipeline stays out of the pipeline binaries: the
     // optimized build that follows is the one kept under the key.
     vk::Pipeline result =
-        binaries && !fast
+        probe ? device.GetLogical().TryCreateComputePipeline(compute_ci, *pipeline_cache)
+        : binaries && !fast
             ? binaries->CreateComputePipeline(compute_ci, *pipeline_cache, binary_key)
             : device.GetLogical().CreateComputePipeline(compute_ci, *pipeline_cache);
     TracePipelineBuild("END", "compute", shader_hash, traced, unoptimized,
@@ -346,7 +350,17 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
 
     auto func{[this, shader_notify, pipeline_statistics] {
         try {
-            if (FastFirstBuildEnabled() && jobs) {
+            const bool smart =
+                SmartFastBuildEnabled() && device.IsPipelineCreationCacheControlEnabled() && jobs;
+            if (smart && (pipeline = MakeComputePipeline(false, true))) {
+                // lichii-arc LICHII_SMART_FAST: the driver's cache had the optimized pipeline.
+                static std::atomic<u32> logged{};
+                if (logged.fetch_add(1) < 200) {
+                    LOG_INFO(Render_Vulkan,
+                             "Nx2Perf smart_fast: compute {:016x} found in the driver cache",
+                             shader_hash);
+                }
+            } else if ((FastFirstBuildEnabled() || smart) && jobs) {
                 // Dispatch with the unoptimized pipeline as soon as the driver returns it; the
                 // optimized one follows as a Background job and takes its place at a later
                 // dispatch (Configure). The module stays until then. A job still queued when the

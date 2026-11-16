@@ -1099,6 +1099,13 @@ public:
 
     [[nodiscard]] PipelineLayout CreatePipelineLayout(const VkPipelineLayoutCreateInfo& ci) const;
 
+    /// lichii-arc: for create infos with VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT:
+    /// an empty pipeline when the driver would have to compile it (VK_PIPELINE_COMPILE_REQUIRED).
+    [[nodiscard]] Pipeline TryCreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci,
+                                                     VkPipelineCache cache) const;
+    [[nodiscard]] Pipeline TryCreateComputePipeline(const VkComputePipelineCreateInfo& ci,
+                                                    VkPipelineCache cache) const;
+
     [[nodiscard]] Pipeline CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci,
                                                   VkPipelineCache cache = {}) const;
 

@@ -791,6 +791,34 @@ Pipeline Device::CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci, 
     return Pipeline(object, handle, *dld);
 }
 
+Pipeline Device::TryCreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci,
+                                          VkPipelineCache cache) const {
+    VkPipeline object = VK_NULL_HANDLE;
+    const VkResult result = dld->vkCreateGraphicsPipelines(handle, cache, 1, &ci, nullptr, &object);
+    if (result == VK_PIPELINE_COMPILE_REQUIRED) {
+        if (object != VK_NULL_HANDLE) {
+            dld->vkDestroyPipeline(handle, object, nullptr);
+        }
+        return Pipeline{};
+    }
+    Check(result);
+    return Pipeline(object, handle, *dld);
+}
+
+Pipeline Device::TryCreateComputePipeline(const VkComputePipelineCreateInfo& ci,
+                                         VkPipelineCache cache) const {
+    VkPipeline object = VK_NULL_HANDLE;
+    const VkResult result = dld->vkCreateComputePipelines(handle, cache, 1, &ci, nullptr, &object);
+    if (result == VK_PIPELINE_COMPILE_REQUIRED) {
+        if (object != VK_NULL_HANDLE) {
+            dld->vkDestroyPipeline(handle, object, nullptr);
+        }
+        return Pipeline{};
+    }
+    Check(result);
+    return Pipeline(object, handle, *dld);
+}
+
 Pipeline Device::CreateComputePipeline(const VkComputePipelineCreateInfo& ci,
                                        VkPipelineCache cache) const {
     VkPipeline object;

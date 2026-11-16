@@ -413,6 +413,13 @@ public:
     /// effects (clouds, particles and glows in a test title, RX 7800 XT), while optimized links
     /// and monolithic pipelines from the same SPIR-V do not, so libraries are linked optimized
     /// there. EDEN_NX2_GPL_FAST_LINK=1 allows fast links on any driver, =0 on none.
+    /// lichii-arc: pipelines can be created with VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_
+    /// REQUIRED_BIT, which asks the driver's cache without compiling (LICHII_SMART_FAST=1 only).
+    bool IsPipelineCreationCacheControlEnabled() const {
+        return pipeline_creation_cache_control_requested &&
+               pipeline_creation_cache_control_features.pipelineCreationCacheControl == VK_TRUE;
+    }
+
     bool CanFastLinkGraphicsLibraries() const {
         static const char forced = [] {
             const char* value = std::getenv("EDEN_NX2_GPL_FAST_LINK");
@@ -1466,6 +1473,10 @@ private:
     /// device exactly as before.
     bool graphics_pipeline_library_requested{};
     VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT graphics_pipeline_library_features{};
+    /// lichii-arc LICHII_SMART_FAST=1: pipelineCreationCacheControl (Vulkan 1.3), queried and
+    /// enabled only then.
+    bool pipeline_creation_cache_control_requested{};
+    VkPhysicalDevicePipelineCreationCacheControlFeatures pipeline_creation_cache_control_features{};
     bool graphics_pipeline_library_enabled{};
 
     VkPhysicalDeviceFeatures2 features2{};
