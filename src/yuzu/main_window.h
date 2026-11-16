@@ -417,6 +417,7 @@ private slots:
     void ShowErrorWithExportLog(const QString& title, const QString& text);
     /// The Fritchii look (fritchii/main_window_fritchii.cpp); nothing in Lichii builds.
     void SetUpFritchiiUi();
+    void SetUpPrecompileGate();
     void OnVerifyInstalledContents();
     void OnInstallFirmware();
     void OnInstallFirmwareFromZIP();

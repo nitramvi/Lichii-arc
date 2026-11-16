@@ -26,6 +26,12 @@
 
 void MainWindow::SetUpFritchiiUi() {
     if (!FritchiiUi::Enabled()) {
+        // lichii-arc: a build not named "Fritchii" keeps the classic UI, but with
+        // LICHII_OOT_PRECOMPILE=1 it still needs the "Preparing shaders" screen: without it the
+        // preparation never runs at full speed (2 idle threads beside the game, ~2 pipelines/s).
+        if (qEnvironmentVariableIntValue("LICHII_OOT_PRECOMPILE") != 0) {
+            SetUpPrecompileGate();
+        }
         return;
     }
 
@@ -153,6 +159,11 @@ void MainWindow::SetUpFritchiiUi() {
     connect(this, &MainWindow::EmulationStarting, controls, &FritchiiUi::GameControls::Start);
     connect(this, &MainWindow::EmulationStopping, controls, &FritchiiUi::GameControls::Stop);
 
+    SetUpPrecompileGate();
+}
+
+void MainWindow::SetUpPrecompileGate() {
+    constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
     // "Preparing shaders" before the game starts when its precompiled pipelines need preparing.
     auto* gate = new FritchiiUi::PrecompileGate(
         this, statusBar(),
