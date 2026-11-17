@@ -422,6 +422,39 @@ std::pair<u64, u64> GraphicsPipeline::TakeTextureMemoCounts() noexcept {
 // TODO(crueter): This is the worst-formatted code I have EVER seen
 /// Creates the descriptor layouts (one set per stage on the library route) and queues the build as
 /// a job of `build_queue`: libraries and a link, a fast first build, or one monolithic pipeline.
+struct GraphicsPipeline::PipelineStates {
+    FixedPipelineState::DynamicState dynamic{};
+    static_vector<VkVertexInputBindingDescription, 32> vertex_bindings;
+    static_vector<VkVertexInputBindingDivisorDescriptionEXT, 32> vertex_binding_divisors;
+    static_vector<VkVertexInputAttributeDescription, 32> vertex_attributes;
+    VkPipelineVertexInputStateCreateInfo vertex_input_ci{};
+    VkPipelineVertexInputDivisorStateCreateInfoEXT input_divisor_ci{};
+    VkPipelineInputAssemblyStateCreateInfo input_assembly_ci{};
+    VkPipelineTessellationStateCreateInfo tessellation_ci{};
+    std::array<VkViewportSwizzleNV, Maxwell::NumViewports> swizzles{};
+    VkPipelineViewportSwizzleStateCreateInfoNV swizzle_ci{};
+    VkPipelineViewportDepthClipControlCreateInfoEXT ndc_info{};
+    VkPipelineViewportStateCreateInfo viewport_ci{};
+    VkPipelineRasterizationStateCreateInfo rasterization_ci{};
+    VkPipelineRasterizationLineStateCreateInfoEXT line_state{};
+    VkPipelineRasterizationConservativeStateCreateInfoEXT conservative_raster{};
+    VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provoking_vertex{};
+    VkPipelineMultisampleStateCreateInfo multisample_ci{};
+    VkPipelineDepthStencilStateCreateInfo depth_stencil_ci{};
+    static_vector<VkPipelineColorBlendAttachmentState, Maxwell::NumRenderTargets> cb_attachments;
+    VkPipelineColorBlendStateCreateInfo color_blend_ci{};
+    static_vector<VkDynamicState, 34> dynamic_states;
+    VkPipelineDynamicStateCreateInfo dynamic_state_ci{};
+    bool is_mesh{};
+    bool has_tess_stages{};
+    // Which structures are chained (a library key holds only what the driver is given).
+    bool chains_swizzle{};
+    bool chains_ndc{};
+    bool chains_line_state{};
+    bool chains_conservative{};
+    bool chains_provoking{};
+};
+
 GraphicsPipeline::GraphicsPipeline(
     Scheduler& scheduler_, BufferCache& buffer_cache_, TextureCache& texture_cache_,
     vk::PipelineCache& pipeline_cache_, PipelineBinaries* binaries_,
@@ -2122,39 +2155,6 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     });
     return true;
 }
-
-struct GraphicsPipeline::PipelineStates {
-    FixedPipelineState::DynamicState dynamic{};
-    static_vector<VkVertexInputBindingDescription, 32> vertex_bindings;
-    static_vector<VkVertexInputBindingDivisorDescriptionEXT, 32> vertex_binding_divisors;
-    static_vector<VkVertexInputAttributeDescription, 32> vertex_attributes;
-    VkPipelineVertexInputStateCreateInfo vertex_input_ci{};
-    VkPipelineVertexInputDivisorStateCreateInfoEXT input_divisor_ci{};
-    VkPipelineInputAssemblyStateCreateInfo input_assembly_ci{};
-    VkPipelineTessellationStateCreateInfo tessellation_ci{};
-    std::array<VkViewportSwizzleNV, Maxwell::NumViewports> swizzles{};
-    VkPipelineViewportSwizzleStateCreateInfoNV swizzle_ci{};
-    VkPipelineViewportDepthClipControlCreateInfoEXT ndc_info{};
-    VkPipelineViewportStateCreateInfo viewport_ci{};
-    VkPipelineRasterizationStateCreateInfo rasterization_ci{};
-    VkPipelineRasterizationLineStateCreateInfoEXT line_state{};
-    VkPipelineRasterizationConservativeStateCreateInfoEXT conservative_raster{};
-    VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provoking_vertex{};
-    VkPipelineMultisampleStateCreateInfo multisample_ci{};
-    VkPipelineDepthStencilStateCreateInfo depth_stencil_ci{};
-    static_vector<VkPipelineColorBlendAttachmentState, Maxwell::NumRenderTargets> cb_attachments;
-    VkPipelineColorBlendStateCreateInfo color_blend_ci{};
-    static_vector<VkDynamicState, 34> dynamic_states;
-    VkPipelineDynamicStateCreateInfo dynamic_state_ci{};
-    bool is_mesh{};
-    bool has_tess_stages{};
-    // Which structures are chained (a library key holds only what the driver is given).
-    bool chains_swizzle{};
-    bool chains_ndc{};
-    bool chains_line_state{};
-    bool chains_conservative{};
-    bool chains_provoking{};
-};
 
 void GraphicsPipeline::FillStates(PipelineStates& s) const {
     FixedPipelineState::DynamicState& dynamic = s.dynamic;
