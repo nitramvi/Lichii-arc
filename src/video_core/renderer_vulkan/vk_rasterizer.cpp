@@ -5360,3 +5360,4 @@ void RasterizerVulkan::ReleaseChannel(s32 channel_id) {
 }
 
 } // namespace Vulkan
+// bisect-44
