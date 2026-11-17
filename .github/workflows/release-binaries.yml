@@ -15,9 +15,14 @@ on:
     branches:
       - nx2-experimental
       - intel-arc
+      - final-arc
       - precompile-arc
       - gpl-arc
       - invent-a
+      - invent-e
+      - invent-h
+      - invent-x
+      - invent-efhx
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"

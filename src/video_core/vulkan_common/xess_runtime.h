@@ -33,6 +33,9 @@ struct Api {
     decltype(&xessSetJitterScale) set_jitter_scale{};
     decltype(&xessSetVelocityScale) set_velocity_scale{};
     decltype(&xessGetIntelXeFXVersion) get_xefx_version{};
+    /// lichii-arc: optional (LICHII_XESS_EARLY_INIT): build XeSS's pipelines ahead of xessVKInit.
+    decltype(&xessVKBuildPipelines) build_pipelines{};
+    decltype(&xessGetPipelineBuildStatus) get_pipeline_build_status{};
     std::string version;
 };
 

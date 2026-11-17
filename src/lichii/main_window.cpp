@@ -16,6 +16,7 @@
 #include <future>
 #include <stop_token>
 #include <boost/algorithm/string/split.hpp>
+#include "common/lichii_diag.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
@@ -1565,6 +1566,39 @@ void MainWindow::InitializeHotkeys() {
         connect(controller_hotkey, &ControllerShortcut::Activated, this, function,
                 Qt::QueuedConnection);
     };
+
+    // lichii-arc: LICHII_DIAG=1 — F9 (anywhere in the application) or L3+R3 on player 1 logs a
+    // numbered mark and saves a
+    // screenshot, so a glitch or a hitch can be found in the log by the moment it was seen.
+    if (Common::LichiiDiag::Enabled() &&
+        findChild<QShortcut*>(QStringLiteral("lichii_diag_mark")) == nullptr) {
+        auto* mark = new QShortcut(QKeySequence(Qt::Key_F9), this);
+        mark->setObjectName(QStringLiteral("lichii_diag_mark"));
+        mark->setContext(Qt::ApplicationShortcut);
+        const auto do_mark = [this] {
+            const u32 number = Common::LichiiDiag::Mark();
+            if (number == 0 || QtCommon::emu_thread == nullptr ||
+                !QtCommon::emu_thread->IsRunning()) {
+                return;
+            }
+            const auto directory = QString::fromStdString(
+                Common::FS::GetEdenPathString(Common::FS::EdenPath::ScreenshotsDir));
+            if (!Common::FS::CreateDir(directory.toStdString())) {
+                return;
+            }
+            const auto date =
+                QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_hh-mm-ss-zzz"));
+            render_window->CaptureScreenshot(
+                QStringLiteral("%1/lichii_mark_%2_%3.png").arg(directory).arg(number).arg(date));
+        };
+        connect(mark, &QShortcut::activated, this, do_mark);
+        // The same from the controller: both sticks pressed together (L3+R3).
+        auto* pad_mark = new ControllerShortcut(
+            QtCommon::system->HIDCore().GetEmulatedController(Core::HID::NpadIdType::Player1));
+        pad_mark->setParent(this);
+        pad_mark->SetKey(std::string{"Left_Stick+Right_Stick"});
+        connect(pad_mark, &ControllerShortcut::Activated, this, do_mark, Qt::QueuedConnection);
+    }
 
     connect_shortcut(QStringLiteral("Exit Fullscreen"), [&] {
         if (emulation_running && ui->action_Fullscreen->isChecked()) {
@@ -5649,6 +5683,10 @@ void MainWindow::OnCaptureScreenshot() {
     }
 #endif
     render_window->CaptureScreenshot(filename);
+    // lichii-arc: with LICHII_DIAG=1 a screenshot is also a mark in the log.
+    if (Common::LichiiDiag::Enabled()) {
+        Common::LichiiDiag::Mark();
+    }
 }
 
 void MainWindow::OnReportBug() {

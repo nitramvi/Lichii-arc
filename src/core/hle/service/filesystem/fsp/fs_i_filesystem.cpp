@@ -3,6 +3,7 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/lichii_diag.h"
 #include "common/string_util.h"
 #include "core/file_sys/fssrv/fssrv_sf_path.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -99,6 +100,8 @@ Result IFileSystem::OpenFile(OutInterface<IFile> out_interface,
                              const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> path,
                              u32 mode) {
     LOG_DEBUG(Service_FS, "called. file={}, mode={}", path->str, mode);
+    // lichii-arc: LICHII_DIAG's "last file opened" for the hitch lines.
+    Common::LichiiDiag::NoteFileOpened(path->str);
 
     FileSys::VirtualFile vfs_file{};
     R_TRY(backend->OpenFile(&vfs_file, FileSys::Path(path->str),

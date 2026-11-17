@@ -87,6 +87,8 @@ add_library(
     intrusive_red_black_tree.h
     literals.h
     logging.cpp
+    lichii_diag.cpp
+    lichii_diag.h
     logging.h
     lz4_compression.cpp
     lz4_compression.h

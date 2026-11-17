@@ -49,6 +49,11 @@ std::shared_ptr<const Api> Load() {
     get(api->set_jitter_scale, "xessSetJitterScale");
     get(api->set_velocity_scale, "xessSetVelocityScale");
     get(api->get_xefx_version, "xessGetIntelXeFXVersion");
+    // Optional: without them the pipelines build inside xessVKInit as before.
+    api->build_pipelines = reinterpret_cast<decltype(api->build_pipelines)>(
+        reinterpret_cast<void*>(GetProcAddress(module, "xessVKBuildPipelines")));
+    api->get_pipeline_build_status = reinterpret_cast<decltype(api->get_pipeline_build_status)>(
+        reinterpret_cast<void*>(GetProcAddress(module, "xessGetPipelineBuildStatus")));
     if (!complete) {
         LOG_WARNING(Render_Vulkan, "XeSS: libxess.dll is incomplete; using FSR 3.1");
         return nullptr;

@@ -22,6 +22,7 @@
 #endif
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
+#include "video_core/texture_cache/astc_disk_cache.h"
 #include "video_core/texture_cache/image_view_base.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -327,6 +328,17 @@ public:
     std::deque<PendingTranscode> pending_transcodes;
     /// Decode images the GPU is done with, for the next texture of the same shape.
     std::vector<PendingTranscode> free_transcodes;
+
+    /// lichii-arc: transcoded ASTC blocks kept on disk (LICHII_ASTC_DISK_CACHE=1), and the
+    /// read-backs of new ones waiting for the GPU.
+    std::unique_ptr<VideoCommon::AstcDiskCache> astc_disk_cache;
+    struct PendingAstcSave {
+        u64 tick;
+        StagingBufferRef readback;
+        VideoCommon::AstcDiskCache::Key key;
+        u64 size;
+    };
+    std::deque<PendingAstcSave> pending_astc_saves;
 
     std::optional<BlockLinearUnswizzle3DPass> bl3d_unswizzle_pass;
     const Settings::ResolutionScalingInfo& resolution;

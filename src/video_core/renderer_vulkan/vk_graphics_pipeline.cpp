@@ -404,7 +404,7 @@ Common::ThreadWorker* GplOptimizeWorkers() {
         return nullptr;
     }
     static Common::ThreadWorker workers(threads, "VkGplOptimize", {},
-                                        Common::ThreadPlacement::Background);
+                                        Common::ThreadPlacement::Speculative);
     return &workers;
 }
 } // Anonymous namespace
@@ -934,6 +934,22 @@ GraphicsPipeline::GraphicsPipeline(
                 LOG_INFO(Render_Vulkan,
                          "Nx2Perf async_pipelines: {:016x} worker emission and driver build {:.1f} ms",
                          key.Hash(), std::chrono::duration<double, std::milli>(elapsed).count());
+            }
+        }
+        // lichii-arc: a precompiled pipeline is prepared in the driver's caches; one that still
+        // takes long was compiled again (the driver or Lichii's Vulkan cache lost it).
+        if (precompiled) {
+            const auto elapsed = std::chrono::steady_clock::now() - begin;
+            if (elapsed > std::chrono::milliseconds{30}) {
+                static std::atomic<u32> slow{};
+                const u32 count = slow.fetch_add(1) + 1;
+                if (count <= 200 || count % 100 == 0) {
+                    LOG_INFO(Render_Vulkan,
+                             "Precompiled cache miss: {:016x} built in {:.1f} ms ({} so far): the "
+                             "driver compiled it again",
+                             key.Hash(),
+                             std::chrono::duration<double, std::milli>(elapsed).count(), count);
+                }
             }
         }
     }};

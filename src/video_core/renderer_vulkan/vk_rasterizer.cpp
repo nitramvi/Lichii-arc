@@ -3552,10 +3552,30 @@ void RasterizerVulkan::UpdateOcarinaJitter() {
                 const auto driver = device.GetDriverID();
                 // lichii-arc: Intel's Windows driver also drops the fraction of the right and
                 // bottom viewport edges (a bright band there under FSR on an Arc 140V).
-                want = VideoCommon::OcarinaJitter(
-                    index, driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
-                               driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
-                               driver == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS);
+                const bool truncated = driver == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                                       driver == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                                       driver == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
+                want = VideoCommon::OcarinaJitter(index, truncated);
+                // lichii-arc: LICHII_OOT_JITTER_SCALE (0..1, default 1) shrinks the offset around
+                // the sequence's centre (0.5 for [0, 1) offsets, 0 otherwise). The viewport and
+                // the upscalers get the same scaled value, so they stay consistent; 0 draws every
+                // frame at the centre (no sub-pixel motion), which tells whether the flicker of
+                // distant shadows comes from the jitter.
+                static const f32 jitter_scale = [] {
+                    const char* value = std::getenv("LICHII_OOT_JITTER_SCALE");
+                    if (value == nullptr) {
+                        return 1.0f;
+                    }
+                    const f32 parsed = std::strtof(value, nullptr);
+                    const f32 clamped = std::clamp(parsed, 0.0f, 1.0f);
+                    LOG_INFO(Render_Vulkan, "Ocarina jitter scale {:.2f}", clamped);
+                    return clamped;
+                }();
+                if (jitter_scale != 1.0f) {
+                    const f32 center = truncated ? 0.5f : 0.0f;
+                    want[0] = center + (want[0] - center) * jitter_scale;
+                    want[1] = center + (want[1] - center) * jitter_scale;
+                }
                 oot_jitter_frame = render_trace_frame;
                 oot_jitter_offset = want;
             }

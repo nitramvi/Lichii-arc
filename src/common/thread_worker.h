@@ -51,6 +51,9 @@ public:
             case ThreadPlacement::Background:
                 Common::SetCurrentThreadToBackgroundWork();
                 break;
+            case ThreadPlacement::Speculative:
+                Common::SetCurrentThreadToSpeculativeWork();
+                break;
             default:
                 Common::SetCurrentThreadToAllCores();
                 break;

@@ -13,6 +13,8 @@
 #include <mutex>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
+#include <tuple>
 #include <fstream>
 #include <optional>
 #include <string_view>
@@ -33,6 +35,7 @@
 #include <ranges>
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "common/thread.h"
 #include "video_core/nx2_stutter_trace.h"
 #include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
@@ -475,10 +478,31 @@ PFN_vkFreeMemory g_vma_free_memory{};
 // instead of in bursts inside a frame.
 namespace MemoryRecycler {
 
+// LICHII_MEM_PREWARM=1: the sizes the last session kept the most of at once are allocated
+// again at startup on a background thread and handed out from the pool, so the first loads do not
+// pay for them inside a frame (OoT's first load: 322 allocations, 926 ms, in one frame).
+// LICHII_MEM_PREWARM_MB caps it (1024 by default). Turns the recycler on too.
+bool PrewarmWanted() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("LICHII_MEM_PREWARM");
+        return value && value[0] == '1';
+    }();
+    return wanted;
+}
+
+VkDeviceSize PrewarmBudget() {
+    static const VkDeviceSize budget = [] {
+        const char* value = std::getenv("LICHII_MEM_PREWARM_MB");
+        const long long mib = value ? std::strtoll(value, nullptr, 10) : 1024;
+        return static_cast<VkDeviceSize>(std::clamp<long long>(mib, 0, 8192)) << 20;
+    }();
+    return budget;
+}
+
 bool Wanted() {
     static const bool wanted = [] {
         const char* value = std::getenv("LICHII_INTEL_MEM_POOL");
-        return value && value[0] == '1';
+        return (value && value[0] == '1') || PrewarmWanted();
     }();
     return wanted;
 }
@@ -496,8 +520,14 @@ struct Kept {
     std::chrono::steady_clock::time_point since;
 };
 
-constexpr VkDeviceSize KeepLimit = 384ull * 1024 * 1024;
+constexpr VkDeviceSize BaseKeepLimit = 384ull * 1024 * 1024;
 constexpr auto KeepFor = std::chrono::seconds{4};
+// Prewarmed allocations wait this long for a taker before going back one at a time.
+constexpr auto PrewarmHold = std::chrono::seconds{180};
+
+VkDeviceSize KeepLimit() {
+    return BaseKeepLimit + (PrewarmWanted() ? PrewarmBudget() : 0);
+}
 
 std::mutex g_mutex;
 std::condition_variable g_wake;
@@ -509,6 +539,125 @@ std::thread g_thread;
 bool g_stop{};
 u64 g_reused{};
 u64 g_kept_total{};
+// Per memory type, size and flags: allocations live now and the most at once this session.
+struct Usage {
+    u32 live{};
+    u32 peak{};
+};
+std::map<std::tuple<u32, VkDeviceSize, VkMemoryAllocateFlags>, Usage> g_usage;
+std::thread g_prewarm_thread;
+std::atomic<bool> g_prewarm_started{};
+u64 g_prewarmed{};
+u64 g_prewarm_used{};
+std::unordered_map<VkDeviceMemory, bool> g_prewarmed_memory;
+
+std::tuple<u32, VkDeviceSize, VkMemoryAllocateFlags> UsageKey(const Key& key) {
+    return {key.type, key.size, key.flags};
+}
+
+void CountLiveLocked(const Key& key, int delta) {
+    Usage& usage = g_usage[UsageKey(key)];
+    if (delta > 0) {
+        ++usage.live;
+        usage.peak = (std::max)(usage.peak, usage.live);
+    } else if (usage.live > 0) {
+        --usage.live;
+    }
+}
+
+std::filesystem::path PrewarmFile() {
+    const auto dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir);
+    return dir / "lichii_mem_prewarm.txt";
+}
+
+void SavePrewarmLocked() {
+    if (!PrewarmWanted() || g_usage.empty()) {
+        return;
+    }
+    std::vector<std::pair<std::tuple<u32, VkDeviceSize, VkMemoryAllocateFlags>, u32>> entries;
+    for (const auto& [key, usage] : g_usage) {
+        if (usage.peak != 0) {
+            entries.emplace_back(key, usage.peak);
+        }
+    }
+    // Most bytes held at once first: the budget keeps those.
+    std::ranges::sort(entries, [](const auto& a, const auto& b) {
+        return std::get<1>(a.first) * a.second > std::get<1>(b.first) * b.second;
+    });
+    std::ofstream file(PrewarmFile(), std::ios::trunc);
+    if (!file) {
+        return;
+    }
+    for (const auto& [key, peak] : entries) {
+        file << std::get<0>(key) << ' ' << std::get<1>(key) << ' ' << std::get<2>(key) << ' '
+             << peak << '\n';
+    }
+}
+
+// Runs once, on the first allocation: the device and VMA's allocate function are known then.
+void Prewarm(VkDevice device) {
+    Common::SetCurrentThreadName("LichiiMemPrewarm");
+    Common::SetCurrentThreadToSpeculativeWork();
+    std::ifstream file(PrewarmFile());
+    if (!file) {
+        LOG_INFO(Render_Vulkan, "Memory prewarm: no sizes from an earlier session yet");
+        return;
+    }
+    const auto begin = std::chrono::steady_clock::now();
+    const VkDeviceSize budget = PrewarmBudget();
+    VkDeviceSize done_bytes = 0;
+    u32 type{};
+    VkDeviceSize size{};
+    VkMemoryAllocateFlags flags{};
+    u32 peak{};
+    u64 count = 0;
+    while (file >> type >> size >> flags >> peak) {
+        for (u32 i = 0; i < peak && done_bytes + size <= budget; ++i) {
+            {
+                std::scoped_lock lock{g_mutex};
+                if (g_stop) {
+                    return;
+                }
+            }
+            const VkMemoryAllocateFlagsInfo flags_info{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+                .pNext = nullptr,
+                .flags = flags,
+                .deviceMask = 0,
+            };
+            const VkMemoryAllocateInfo info{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                .pNext = flags != 0 ? &flags_info : nullptr,
+                .allocationSize = size,
+                .memoryTypeIndex = type,
+            };
+            VkDeviceMemory memory{};
+            if (g_vma_allocate_memory(device, &info, nullptr, &memory) != VK_SUCCESS) {
+                LOG_INFO(Render_Vulkan, "Memory prewarm: stopped at an allocation the driver "
+                                        "refused (type {}, {} KiB)",
+                         type, size >> 10);
+                file.setstate(std::ios::failbit);
+                break;
+            }
+            std::scoped_lock lock{g_mutex};
+            g_kept.push_back({memory, Key{type, size, flags},
+                              std::chrono::steady_clock::now() + PrewarmHold});
+            g_kept_bytes += size;
+            g_prewarmed_memory.emplace(memory, true);
+            done_bytes += size;
+            ++count;
+        }
+        if (done_bytes >= budget) {
+            break;
+        }
+    }
+    std::scoped_lock lock{g_mutex};
+    g_prewarmed = count;
+    LOG_INFO(Render_Vulkan, "Memory prewarm: {} allocations, {} MiB, in {:.0f} ms", count,
+             done_bytes >> 20,
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+                 .count());
+}
 
 // Only plain allocations (optionally with VkMemoryAllocateFlagsInfo) can be handed to someone
 // else; a dedicated allocation belongs to its image or buffer.
@@ -572,11 +721,19 @@ void Shutdown() {
     if (g_thread.joinable()) {
         g_thread.join();
     }
+    if (g_prewarm_thread.joinable()) {
+        g_prewarm_thread.join();
+    }
     std::scoped_lock lock{g_mutex};
+    SavePrewarmLocked();
     FreeAllLocked();
     g_live.clear();
-    LOG_INFO(Render_Vulkan, "Memory recycler: {} allocations reused, {} kept in all", g_reused,
-             g_kept_total);
+    g_usage.clear();
+    g_prewarmed_memory.clear();
+    LOG_INFO(Render_Vulkan,
+             "Memory recycler: {} allocations reused, {} kept in all; prewarm {} allocated, {} "
+             "used",
+             g_reused, g_kept_total, g_prewarmed, g_prewarm_used);
     g_stop = false;
 }
 
@@ -599,6 +756,9 @@ VKAPI_ATTR VkResult VKAPI_CALL TimedAllocateMemory(VkDevice device,
         if (!R::g_thread.joinable()) {
             R::g_thread = std::thread{R::Worker};
         }
+        if (R::PrewarmWanted() && !R::g_prewarm_started.exchange(true)) {
+            R::g_prewarm_thread = std::thread{R::Prewarm, device};
+        }
         const auto match = std::ranges::find(R::g_kept, *key, &R::Kept::key);
         if (match != R::g_kept.end()) {
             *memory = match->memory;
@@ -606,6 +766,10 @@ VKAPI_ATTR VkResult VKAPI_CALL TimedAllocateMemory(VkDevice device,
             R::g_kept.pop_back();
             R::g_kept_bytes -= key->size;
             R::g_live.insert_or_assign(*memory, *key);
+            R::CountLiveLocked(*key, 1);
+            if (R::g_prewarmed_memory.erase(*memory) != 0) {
+                ++R::g_prewarm_used;
+            }
             ++R::g_reused;
             return VK_SUCCESS;
         }
@@ -622,6 +786,7 @@ VKAPI_ATTR VkResult VKAPI_CALL TimedAllocateMemory(VkDevice device,
     if (result == VK_SUCCESS && key) {
         std::scoped_lock lock{R::g_mutex};
         R::g_live.insert_or_assign(*memory, *key);
+        R::CountLiveLocked(*key, 1);
     }
     return result;
 }
@@ -637,7 +802,8 @@ VKAPI_ATTR void VKAPI_CALL TimedFreeMemory(VkDevice device, VkDeviceMemory memor
         if (live != R::g_live.end()) {
             const R::Key key = live->second;
             R::g_live.erase(live);
-            if (!R::g_stop && R::g_kept_bytes + key.size <= R::KeepLimit) {
+            R::CountLiveLocked(key, -1);
+            if (!R::g_stop && R::g_kept_bytes + key.size <= R::KeepLimit()) {
                 R::g_kept.push_back({memory, key, std::chrono::steady_clock::now()});
                 R::g_kept_bytes += key.size;
                 ++R::g_kept_total;

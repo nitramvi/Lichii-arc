@@ -502,6 +502,9 @@ private:
 
     std::filesystem::path vulkan_pipeline_cache_filename;
     vk::PipelineCache vulkan_pipeline_cache;
+    /// lichii-arc: size of the Vulkan pipeline cache as last read from or written to disk
+    /// (LICHII_BIG_PIPELINE_CACHE=1 skips a session-end write of an unchanged cache).
+    std::atomic<size_t> vulkan_cache_bytes_on_disk{};
     size_t pipelines_since_flush{};
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};

@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -809,6 +810,80 @@ void SetCurrentThreadToBackgroundWork() {
     if (const WindowsCpuSets& sets = CpuSets(); sets.hybrid) {
         SelectCurrentThreadCpuSets({});
     }
+#endif
+}
+
+void SetCurrentThreadToSpeculativeWork() {
+#ifdef _WIN32
+    static const int mode = [] {
+        const char* value = std::getenv("LICHII_ECORE_COMPILE");
+        return value != nullptr ? static_cast<int>(std::strtol(value, nullptr, 10)) : 0;
+    }();
+    if (mode <= 0) {
+        SetCurrentThreadToBackgroundWork();
+        return;
+    }
+    const WindowsCpuSets& sets = CpuSets();
+    if (sets.efficiency.empty()) {
+        static std::atomic<bool> logged{};
+        if (!logged.exchange(true)) {
+            LOG_INFO(Common, "LICHII_ECORE_COMPILE: no efficiency cores found ({} logical "
+                             "processors), speculative work stays on all cores",
+                     sets.processors.size());
+        }
+        SetCurrentThreadToBackgroundWork();
+        return;
+    }
+    {
+        static std::atomic<bool> logged{};
+        if (!logged.exchange(true)) {
+            LOG_INFO(Common,
+                     "LICHII_ECORE_COMPILE: {} performance and {} efficiency logical processors; "
+                     "speculative work goes to the efficiency ones{}",
+                     sets.performance.size(), sets.efficiency.size(),
+                     mode >= 2 ? " (EcoQoS)" : "");
+        }
+    }
+    SelectCurrentThreadCpuSets(sets.efficiency);
+    if (mode >= 2) {
+        // THREAD_POWER_THROTTLING_STATE, declared here: older SDK and MinGW headers lack it.
+        struct PowerThrottlingState {
+            ULONG Version;
+            ULONG ControlMask;
+            ULONG StateMask;
+        };
+        constexpr ULONG CurrentVersion = 1;
+        constexpr ULONG ExecutionSpeed = 0x1;
+        constexpr int ThreadPowerThrottlingClass = 4; // THREAD_INFORMATION_CLASS
+        using SetThreadInformationFn = BOOL(WINAPI*)(HANDLE, int, LPVOID, DWORD);
+        static const auto set_information = reinterpret_cast<SetThreadInformationFn>(
+            reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
+                                                   "SetThreadInformation")));
+        if (set_information != nullptr) {
+            PowerThrottlingState state{CurrentVersion, ExecutionSpeed, ExecutionSpeed};
+            if (!set_information(GetCurrentThread(), ThreadPowerThrottlingClass, &state,
+                                 sizeof(state))) {
+                LOG_DEBUG(Common, "EcoQoS refused: {}", ::Common::GetLastErrorMsg());
+            }
+        }
+    }
+    char name[64]{};
+    using GetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PWSTR*);
+    static const auto get_description = reinterpret_cast<GetThreadDescriptionFn>(
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"KernelBase.dll"),
+                                               "GetThreadDescription")));
+    if (get_description != nullptr) {
+        PWSTR description = nullptr;
+        if (SUCCEEDED(get_description(GetCurrentThread(), &description)) &&
+            description != nullptr) {
+            WideCharToMultiByte(CP_UTF8, 0, description, -1, name, sizeof(name) - 1, nullptr,
+                                nullptr);
+            LocalFree(description);
+        }
+    }
+    LOG_INFO(Common, "LICHII_ECORE_COMPILE: thread '{}' on the efficiency cores", name);
+#else
+    SetCurrentThreadToBackgroundWork();
 #endif
 }
 
