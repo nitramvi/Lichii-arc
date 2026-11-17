@@ -6,9 +6,11 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -170,6 +172,7 @@ struct Job {
     std::vector<u8> program;
     std::vector<u8> constants;
     ComputeControl control{};
+    bool guessed{}; ///< lichii-arc: a workgroup size guessed for a program without one
 };
 
 struct JobResult {
@@ -268,7 +271,14 @@ private:
         try {
             LoweredCode lowered;
             if (const auto error = LowerProgram(job.program, job.graphics, lowered)) {
-                LOG_DEBUG(Render_Vulkan, "Shader precache: program not converted: {}", *error);
+                static std::atomic<u32> logged{};
+                if (WarmComputeSkippedEnabled() && !job.graphics &&
+                    logged.fetch_add(1, std::memory_order_relaxed) < 20) {
+                    LOG_INFO(Render_Vulkan, "Shader precache: compute program not converted: {}",
+                             *error);
+                } else {
+                    LOG_DEBUG(Render_Vulkan, "Shader precache: program not converted: {}", *error);
+                }
                 return result;
             }
             if (job.graphics) {
@@ -280,7 +290,14 @@ private:
             }
             result.ok = true;
         } catch (const std::exception& e) {
-            LOG_DEBUG(Render_Vulkan, "Shader precache: conversion failed: {}", e.what());
+            static std::atomic<u32> logged{};
+            if (WarmComputeSkippedEnabled() && !job.graphics &&
+                logged.fetch_add(1, std::memory_order_relaxed) < 20) {
+                LOG_INFO(Render_Vulkan, "Shader precache: compute conversion failed: {}",
+                         e.what());
+            } else {
+                LOG_DEBUG(Render_Vulkan, "Shader precache: conversion failed: {}", e.what());
+            }
         }
         return result;
     }
@@ -710,6 +727,24 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
     size_t archive_errors = 0;
     size_t member_errors = 0;
     size_t seq = 0;
+    // lichii-arc LICHII_WARM_COMPUTE_SKIPPED: what the precache leaves out, and the programs
+    // without a workgroup size converted later with the likely ones.
+    const bool warm_skipped = WarmComputeSkippedEnabled();
+    struct DeferredCompute {
+        std::vector<u8> program;
+        std::vector<u8> constants;
+        ComputeControl control;
+    };
+    std::vector<DeferredCompute> deferred_compute;
+    std::map<std::array<u32, 3>, size_t> workgroup_counts;
+    std::map<std::string, size_t> member_error_kinds;
+    size_t skipped_no_workgroup = 0;
+    size_t skipped_short_control = 0;
+    size_t skipped_compute_conversion = 0;
+    size_t skipped_graphics_conversion = 0;
+    size_t guessed_compute = 0;
+    std::vector<std::array<u8, 24>> compute_index;
+    std::vector<bool> compute_index_guessed;
 
     const size_t threads =
         options.threads != 0
@@ -724,6 +759,7 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         const auto [is_graphics, index] = job_kinds[consumed++];
         if (!r.ok) {
             ++result.skipped;
+            ++(is_graphics ? skipped_graphics_conversion : skipped_compute_conversion);
             return;
         }
         if (!is_graphics) {
@@ -732,6 +768,14 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
                 compute_out.write(reinterpret_cast<const char*>(r.bytes.data()),
                                   static_cast<std::streamsize>(r.bytes.size()));
                 ++result.compute_programs;
+                if (warm_skipped) {
+                    std::array<u8, 24> index_key{};
+                    std::memcpy(index_key.data(), r.compute_key.data(),
+                                std::min(index_key.size(), r.compute_key.size()));
+                    compute_index.push_back(index_key);
+                    compute_index_guessed.push_back(index == 1);
+                    guessed_compute += index == 1 ? 1 : 0;
+                }
             }
             return;
         }
@@ -837,8 +881,22 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
                 const auto values = ReadComputeControl(record.control);
                 if (!values || !values->workgroup[0] || !values->workgroup[1] ||
                     !values->workgroup[2]) {
+                    if (warm_skipped && values) {
+                        // Set by the dispatch at run time: converted after the walk with the
+                        // workgroup sizes most common among the game's other programs.
+                        ++skipped_no_workgroup;
+                        deferred_compute.push_back(
+                            {std::vector<u8>(record.code.begin(), record.code.end()),
+                             std::vector<u8>(record.constants.begin(), record.constants.end()),
+                             *values});
+                        return;
+                    }
+                    ++(values ? skipped_no_workgroup : skipped_short_control);
                     ++result.skipped;
                     return;
+                }
+                if (warm_skipped) {
+                    ++workgroup_counts[values->workgroup];
                 }
                 job.control = *values;
                 job.stage = 5;
@@ -856,6 +914,10 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
         };
         const auto on_member_error = [&](const std::string& error) {
             ++member_errors;
+            if (warm_skipped) {
+                const size_t colon = error.rfind(": ");
+                ++member_error_kinds[colon == std::string::npos ? error : error.substr(colon + 2)];
+            }
             LOG_DEBUG(Render_Vulkan, "Shader precache: {}: {}", archive.path, error);
         };
         try {
@@ -868,6 +930,46 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
     }
     report(StageExtracting, archives.size(), archives.size());
 
+    if (warm_skipped && !deferred_compute.empty() && !workgroup_counts.empty()) {
+        size_t variants = 4;
+        if (const char* value = std::getenv("LICHII_WARM_COMPUTE_SKIPPED_VARIANTS")) {
+            variants = std::clamp<size_t>(std::strtoul(value, nullptr, 10), 1, 16);
+        }
+        std::vector<std::pair<size_t, std::array<u32, 3>>> ranked;
+        for (const auto& [size, count] : workgroup_counts) {
+            ranked.emplace_back(count, size);
+        }
+        std::ranges::sort(ranked, std::greater{});
+        ranked.resize(std::min(ranked.size(), variants));
+        std::string sizes;
+        for (const auto& [count, size] : ranked) {
+            sizes += fmt::format(" {}x{}x{} ({})", size[0], size[1], size[2], count);
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Shader precache: {} compute programs have no workgroup size in the game files; "
+                 "converting each with the most common sizes:{}",
+                 deferred_compute.size(), sizes);
+        for (const DeferredCompute& program : deferred_compute) {
+            for (const auto& [count, size] : ranked) {
+                Job job;
+                job.control = program.control;
+                job.control.workgroup = size;
+                job.stage = 5;
+                job.guessed = true;
+                job.seq = seq++;
+                job.program = program.program;
+                job.constants = program.constants;
+                job_kinds.emplace_back(false, size_t{1});
+                converter->Push(std::move(job));
+                while (converter->Pending() > MaxPendingJobs && !stop.stop_requested()) {
+                    if (auto r = converter->Next(true)) {
+                        consume(std::move(*r));
+                    }
+                }
+            }
+        }
+        deferred_compute.clear();
+    }
     const size_t total_jobs = seq;
     while (consumed < total_jobs) {
         if (stop.stop_requested()) {
@@ -1066,6 +1168,34 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
                    result.vertex_programs + result.fragment_programs + result.tess_pipelines);
     report(StageWriting, patches.size(), patches.size());
     result.ok = true;
+    if (warm_skipped) {
+        // Every compute key of the precache, for LICHII_COMPUTE_ORIGIN at run time: StageHash,
+        // shared memory, workgroup, and 1 when the workgroup was guessed.
+        std::ofstream index_out(output_dir / "warm-compute-index.txt", std::ios::trunc);
+        for (size_t i = 0; i < compute_index.size(); ++i) {
+            u64 hash{};
+            std::array<u32, 4> rest{};
+            std::memcpy(&hash, compute_index[i].data(), sizeof(hash));
+            std::memcpy(rest.data(), compute_index[i].data() + 8, sizeof(rest));
+            index_out << fmt::format("{:016x} {} {} {} {} {}\n", hash, rest[0], rest[1], rest[2],
+                                     rest[3], compute_index_guessed[i] ? 1 : 0);
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Shader precache skipped programs: {} compute without a workgroup size ({} "
+                 "entries guessed), {} with a short control, {} compute and {} graphics not "
+                 "converted",
+                 skipped_no_workgroup, guessed_compute, skipped_short_control,
+                 skipped_compute_conversion, skipped_graphics_conversion);
+        std::vector<std::pair<size_t, std::string>> kinds;
+        for (const auto& [kind, count] : member_error_kinds) {
+            kinds.emplace_back(count, kind);
+        }
+        std::ranges::sort(kinds, std::greater{});
+        for (size_t i = 0; i < std::min<size_t>(kinds.size(), 12); ++i) {
+            LOG_INFO(Render_Vulkan, "Shader precache member errors: {} x {}", kinds[i].first,
+                     kinds[i].second);
+        }
+    }
     LOG_INFO(Render_Vulkan,
              "Shader precache build for {:016x}: {} compute, {} vertex, {} fragment, {} "
              "tessellated entries, {} programs skipped, {} archive and {} member errors, {:.1f} s",

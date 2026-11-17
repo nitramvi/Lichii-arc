@@ -26,6 +26,7 @@
 #include <span>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "common/cityhash.h"
@@ -90,6 +91,7 @@
 #include "video_core/shader_environment.h"
 #include "video_core/shader_notify.h"
 #include "video_core/shader_warm/shader_warm_builder.h"
+#include "video_core/shader_warm/warm_records.h"
 #include "video_core/spirv_inline_control.h"
 #include "video_core/surface.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -102,6 +104,83 @@
 namespace Vulkan {
 
 namespace {
+
+/// lichii-arc LICHII_WARM_COMPUTE_SKIPPED: for each compute pipeline built while the game runs,
+/// where its program stands in the precache (warm-compute-index.txt, written by the builder).
+struct ComputeOriginIndex {
+    std::mutex mutex;
+    std::filesystem::path path;
+    bool loaded{};
+    bool present{};
+    std::unordered_multimap<u64, std::array<u32, 5>> entries; // shared, workgroup, guessed
+    std::unordered_set<u64> reported;
+};
+
+ComputeOriginIndex& OriginIndex() {
+    static ComputeOriginIndex index;
+    return index;
+}
+
+void SetComputeOriginIndexPath(const std::filesystem::path& path) {
+    auto& index = OriginIndex();
+    std::scoped_lock lock{index.mutex};
+    index.path = path;
+    index.loaded = false;
+    index.present = false;
+    index.entries.clear();
+}
+
+void ExplainRuntimeCompute(u64 unique_hash, u32 shared_memory,
+                           const std::array<u32, 3>& workgroup) {
+    auto& index = OriginIndex();
+    std::scoped_lock lock{index.mutex};
+    if (index.path.empty() || index.reported.size() >= 400 ||
+        !index.reported.insert(unique_hash).second) {
+        return;
+    }
+    if (!index.loaded) {
+        index.loaded = true;
+        std::ifstream in(index.path);
+        index.present = static_cast<bool>(in);
+        std::string hash_text;
+        std::array<u32, 5> values{};
+        while (in >> hash_text >> values[0] >> values[1] >> values[2] >> values[3] >> values[4]) {
+            index.entries.emplace(std::strtoull(hash_text.c_str(), nullptr, 16), values);
+        }
+    }
+    std::string verdict;
+    if (!index.present) {
+        verdict = "no precache index (build the precache with LICHII_WARM_COMPUTE_SKIPPED=1)";
+    } else {
+        const auto [first, last] = index.entries.equal_range(unique_hash);
+        bool same = false;
+        bool guessed = false;
+        std::string others;
+        size_t other_count = 0;
+        for (auto it = first; it != last; ++it) {
+            const auto& v = it->second;
+            if (v[0] == shared_memory && v[1] == workgroup[0] && v[2] == workgroup[1] &&
+                v[3] == workgroup[2]) {
+                same = true;
+                guessed = guessed || v[4] != 0;
+            } else if (other_count++ < 4) {
+                others += fmt::format(" {}x{}x{}/{}{}", v[1], v[2], v[3], v[0],
+                                      v[4] != 0 ? "(guessed)" : "");
+            }
+        }
+        if (same) {
+            verdict = guessed ? "in the precache with this guessed workgroup (should be warm)"
+                              : "in the precache with this key (should be warm)";
+        } else if (first != last) {
+            verdict = fmt::format("in the game files with other sizes (workgroup/shared):{}",
+                                  others);
+        } else {
+            verdict = "not among the game files' compute programs";
+        }
+    }
+    LOG_INFO(Render_Vulkan, "LICHII_COMPUTE_ORIGIN s6:{:016x} workgroup {}x{}x{} shared {}: {}",
+             unique_hash, workgroup[0], workgroup[1], workgroup[2], shared_memory, verdict);
+}
 using Shader::Backend::SPIRV::EmitSPIRV;
 using Shader::Maxwell::ConvertLegacyToGeneric;
 using Shader::Maxwell::GenerateGeometryPassthrough;
@@ -2720,6 +2799,9 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::stop_token stop_loading,
     std::vector<PrecacheJob> jobs;
     const std::filesystem::path warm_file = ShaderWarm::ComputeWarmPath(title_id);
     const std::string path = Common::FS::PathToUTF8String(warm_file);
+    if (ShaderWarm::WarmComputeSkippedEnabled()) {
+        SetComputeOriginIndexPath(warm_file.parent_path() / "warm-compute-index.txt");
+    }
     const auto stamp = [&](u64 entries) {
         return ShaderWarm::CurrentWarmStamp(warm_file, entries, device.GetDriverVersion(),
                                             device.GetDeviceID(), CACHE_VERSION,
@@ -6059,6 +6141,9 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(const ComputePipe
         std::shared_ptr<ShaderPools> emit_pools = TakeSparePools();
         ShaderPools& pools = *emit_pools;
         entry = CreateComputePipeline(pools, key, env, nullptr, true, std::move(emit_pools));
+    }
+    if (VideoCommon::ShaderWarm::WarmComputeSkippedEnabled()) {
+        ExplainRuntimeCompute(key.unique_hash, key.shared_memory_size, key.workgroup_size);
     }
     if (const char* directory = std::getenv("EDEN_NX2_SHADER_DUMP");
         directory && !entry.pipeline && env.CanBeSerialized()) {

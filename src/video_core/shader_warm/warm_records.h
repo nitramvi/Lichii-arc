@@ -55,8 +55,16 @@ constexpr u32 WarmBuilderVersion = 4;
 /// same as without it.
 bool WarmTessellationEnabled();
 
+/// lichii-arc: LICHII_WARM_COMPUTE_SKIPPED=1 keeps the compute programs whose control in the game
+/// files has no workgroup size (set by the dispatch at run time): each is converted with the
+/// workgroup sizes most common among the game's other compute programs, so the warm-up builds the
+/// likely ones. It also writes warm-compute-index.txt (every compute key of the precache) and logs
+/// what the skipped programs and member errors were. Off: the files are the same as without it.
+bool WarmComputeSkippedEnabled();
+
 /// The builder version recorded in a precache's count file: WarmBuilderVersion, or a distinct one
-/// with LICHII_WARM_TESS=1, so turning it on or off builds the files again once.
+/// with LICHII_WARM_TESS=1 or LICHII_WARM_COMPUTE_SKIPPED=1, so turning one on or off builds the
+/// files again once.
 u32 CurrentWarmBuilderVersion();
 
 using GraphicsKey = std::array<u8, GraphicsKeySize>;

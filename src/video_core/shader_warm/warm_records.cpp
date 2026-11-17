@@ -245,8 +245,17 @@ bool WarmTessellationEnabled() {
     return enabled;
 }
 
+bool WarmComputeSkippedEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("LICHII_WARM_COMPUTE_SKIPPED");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 u32 CurrentWarmBuilderVersion() {
-    return WarmTessellationEnabled() ? WarmBuilderVersion + 1000 : WarmBuilderVersion;
+    return WarmBuilderVersion + (WarmTessellationEnabled() ? 1000U : 0U) +
+           (WarmComputeSkippedEnabled() ? 2000U : 0U);
 }
 
 u64 StageHash(std::span<const u8> code) {
