@@ -5,7 +5,7 @@
 #include <functional>
 
 #include "common/game_file_trace.h"
-#include "common/logging/log.h"
+#include "common/logging.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/file_sys/vfs/vfs_offset.h"
