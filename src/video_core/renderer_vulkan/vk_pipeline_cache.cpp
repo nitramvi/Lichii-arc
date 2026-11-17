@@ -4560,10 +4560,41 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
             mode = NativePendingMode::Skip;
         }
     }
+    // lichii-arc (LICHII_DRAW_HISTORY_GUARD=1, upstream #2104): a native draw counts as
+    // depth-tested only when the depth test is really on, it is not a mesh draw and every render
+    // target it writes color into was first written in an earlier frame. A draw that bakes a
+    // texture once (or a new target) then waits instead of leaving it unwritten. Off by default.
+    static const bool history_guard = [] {
+        const char* value = std::getenv("LICHII_DRAW_HISTORY_GUARD");
+        const bool enabled = value != nullptr && value[0] == '1';
+        if (enabled) {
+            LOG_INFO(Render_Vulkan,
+                     "LICHII_DRAW_HISTORY_GUARD: native draws skip only onto targets with history");
+        }
+        return enabled;
+    }();
+    bool depth_tested = maxwell3d->regs.zeta_enable != 0;
+    if (history_guard && native && mode != NativePendingMode::Wait) {
+        const auto& regs = maxwell3d->regs;
+        const auto writes_color = [&regs](u32 rt_index) {
+            return rt_index < Maxwell::NumRenderTargets &&
+                   regs.rt[rt_index].format != Tegra::RenderTargetFormat::NONE &&
+                   regs.color_mask[regs.color_mask_common ? 0 : rt_index].raw != 0;
+        };
+        depth_tested = regs.zeta_enable != 0 && regs.depth_test_enable != 0 &&
+                       !regs.IsMeshEnabled() &&
+                       ColorWritesHaveHistory(
+                           std::min<u32>(regs.rt_control.count,
+                                         static_cast<u32>(Maxwell::NumRenderTargets)),
+                           [&regs](u32 i) { return regs.rt_control.Map(i); }, writes_color,
+                           [this](u32 rt_index) {
+                               return texture_cache.ColorTargetWrittenBeforeThisFrame(rt_index);
+                           });
+    }
     // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
     const bool can_discard = CanDiscardPendingDraw(
-        native, maxwell3d->regs.zeta_enable != 0, draw_state.draw_element_count,
-        draw_state.draw_element_count, native && mode != NativePendingMode::Wait);
+        native, depth_tested, draw_state.draw_element_count, draw_state.draw_element_count,
+        native && mode != NativePendingMode::Wait);
     bool discard = can_discard;
     if (native) {
         switch (DecideNativePending(mode, can_discard, native_wait_budget_us)) {
@@ -4638,6 +4669,95 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
         }
     }
     return discard ? nullptr : pipeline;
+}
+
+NativePendingMode PipelineCache::NativeMode() const {
+    // EDEN_NX2_ASYNC_DISCARD=1: skip native work whose pipeline is still building instead of
+    // waiting for it (experimental; the draw may be missing for a frame or more).
+    /// Reads EDEN_NX2_ASYNC_DISCARD once and logs when it is on.
+    static const bool discard_native = [] {
+        const char* value = std::getenv("EDEN_NX2_ASYNC_DISCARD");
+        const bool enabled = value != nullptr && value[0] == '1';
+        if (enabled) {
+            LOG_INFO(Render_Vulkan, "EDEN_NX2_ASYNC_DISCARD: native draws skip unbuilt pipelines");
+        }
+        return enabled;
+    }();
+    // The environment variable wins over the setting; the setting is read per call.
+    if (discard_native) {
+        return NativePendingMode::Skip;
+    }
+    switch (Settings::values.native_async_draws.GetValue()) {
+    case Settings::NativeAsyncDraws::Bounded:
+        return NativePendingMode::Bounded;
+    case Settings::NativeAsyncDraws::Skip:
+        return NativePendingMode::Skip;
+    default:
+        return NativePendingMode::Wait;
+    }
+}
+
+void PipelineCache::LogBoundedWaits() {
+    static auto window = std::chrono::steady_clock::now();
+    if (std::chrono::steady_clock::now() - window <= std::chrono::seconds{10}) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan,
+             "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms per frame)",
+             static_cast<double>(native_wait_used_us) / 1000.0,
+             Settings::values.native_pipeline_wait_ms.GetValue());
+    native_wait_used_us = 0;
+    window = std::chrono::steady_clock::now();
+}
+
+bool PipelineCache::SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_hold_gpu_data) {
+    // lichii-arc: upstream #2104 behind LICHII_COMPUTE_SKIP=1. Off: a native dispatch with an
+    // unbuilt pipeline waits for it as before.
+    static const bool compute_skip = [] {
+        const char* value = std::getenv("LICHII_COMPUTE_SKIP");
+        const bool enabled = value != nullptr && value[0] == '1';
+        if (enabled) {
+            LOG_INFO(Render_Vulkan, "LICHII_COMPUTE_SKIP: native dispatches may skip unbuilt "
+                                    "compute pipelines whose outputs already hold GPU writes");
+        }
+        return enabled;
+    }();
+    if (!compute_skip) {
+        return false;
+    }
+    if (!use_asynchronous_shaders) {
+        return false;
+    }
+    const NativePendingMode mode = NativeMode();
+    switch (DecideNativePending(mode, outputs_hold_gpu_data, native_wait_budget_us)) {
+    case NativeDrawAction::Wait:
+        if (mode != NativePendingMode::Wait && pipeline.FirstWaitForBuild()) {
+            LOG_INFO(Render_Vulkan,
+                     "Compute pipeline {:016x} is still building: its dispatch waits, its outputs "
+                     "hold no earlier shader results",
+                     pipeline.ShaderHash());
+        }
+        return false;
+    case NativeDrawAction::WaitTimed: {
+        const bool built = WaitWithinBudget(native_wait_budget_us, native_wait_used_us,
+                                            [&](std::chrono::microseconds timeout) {
+                                                return pipeline.WaitBuilt(timeout);
+                                            });
+        LogBoundedWaits();
+        if (built) {
+            return false;
+        }
+        break;
+    }
+    case NativeDrawAction::Skip:
+        break;
+    }
+    static std::atomic<u64> skipped{};
+    if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+        LOG_INFO(Render_Vulkan, "Async shaders: {} compute dispatches skipped for unbuilt pipelines",
+                 skipped.load(std::memory_order_relaxed));
+    }
+    return true;
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::RebuildGraphicsPipeline(KeptGraphicsStages kept) {

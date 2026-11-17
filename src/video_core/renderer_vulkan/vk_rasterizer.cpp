@@ -2520,10 +2520,16 @@ void RasterizerVulkan::DispatchCompute() {
                                  OcarinaTemporalEnabled() && !indirect_address && !list_slot &&
                                  !frame_dump.Capturing();
     ComputePipeline::BindCommand deferred_bind;
-    if (!pipeline->Configure(*kepler_compute, *gpu_memory, scheduler, buffer_cache,
-                             texture_cache, texture_cache_runtime, byte_addressed_shadow,
-                             can_replace || marking_effects ? &deferred_bind : nullptr)) {
+    switch (pipeline->Configure(*kepler_compute, *gpu_memory, scheduler, buffer_cache,
+                                texture_cache, texture_cache_runtime, pipeline_cache,
+                                byte_addressed_shadow,
+                                can_replace || marking_effects ? &deferred_bind : nullptr)) {
+    case ComputePipeline::ConfigureResult::Ready:
+        break;
+    case ComputePipeline::ConfigureResult::Failed:
         if (kepler_compute->IsNativeMode()) throw Shader::RuntimeError("Native compute resources unavailable");
+        return;
+    case ComputePipeline::ConfigureResult::Skipped:
         return;
     }
     // lichii-arc (LICHII_DIAG=1): a dispatch that reads one shared-exponent colour image and writes
