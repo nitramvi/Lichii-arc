@@ -3555,10 +3555,28 @@ void RasterizerVulkan::TrackOcarinaCamera() {
     }
     VideoCommon::OcarinaCameraBuffer values;
     device_memory.ReadBlockUnsafe(*device_address, values.data(), sizeof(values));
+    // lichii-arc (LICHII_OOT_ALLOW_PADDING=1): accept a scene drawn into a slightly larger target
+    // (custom render scales) for XeSS/FSR as well, not only DLSS.
+    static const bool allow_padding_env = [] {
+        const char* value = std::getenv("LICHII_OOT_ALLOW_PADDING");
+        return value && value[0] == '1';
+    }();
     const auto camera = VideoCommon::DecodeOcarinaCamera(
         values, color.size.width, color.size.height,
-        oot_backend == VideoCommon::OcarinaUpscaleBackend::Dlss);
+        oot_backend == VideoCommon::OcarinaUpscaleBackend::Dlss || allow_padding_env);
     if (camera.issue != VideoCommon::OcarinaCameraIssue::None) {
+        // lichii-arc (LICHII_DIAG=1): why a scene-sized draw's camera was refused, once per change.
+        if (Common::LichiiDiag::Enabled()) {
+            static std::string last;
+            const std::string detail = fmt::format(
+                "issue={} camera={}x{} target={}x{}", static_cast<int>(camera.issue),
+                values[0x120 / sizeof(f32)], values[0x124 / sizeof(f32)], color.size.width,
+                color.size.height);
+            if (detail != last) {
+                last = detail;
+                LOG_INFO(Render_Vulkan, "LICHII_CAMERA_REFUSED {}", detail);
+            }
+        }
         return;
     }
     oot_camera_sample_frame = render_trace_frame;
