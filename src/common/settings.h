@@ -1176,6 +1176,9 @@ NvidiaDlssRuntimeSettings GetNvidiaDlssRuntimeSettings();
 /// The NVIDIA DLSS quality whose render scale Ocarina of Time's built-in patch applies when the
 /// game starts: Balanced, Performance or Ultra Performance with NVIDIA DLSS on, docked.
 std::optional<NvidiaDlssQuality> OcarinaDlssRenderScale();
+/// lichii-arc: LICHII_OOT_RENDER_SCALE=<0.5..1.0> (e.g. 0.83): the instruction word that loads that
+/// scale (rounded to a float with a zero low half) in place of the Performance patch's 0.75.
+std::optional<u32> OcarinaCustomRenderScaleWord();
 /// The quality whose render-scale patch the running game's main module got (none: unpatched).
 void SetAppliedOcarinaRenderScale(std::optional<NvidiaDlssQuality> quality);
 std::optional<NvidiaDlssQuality> AppliedOcarinaRenderScale();

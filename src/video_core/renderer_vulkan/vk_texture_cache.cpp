@@ -4893,11 +4893,35 @@ void CustomBorderColorBudget::Release() noexcept {
     held = 0;
 }
 
+namespace {
+std::optional<f32> OcarinaHandheldLodBias() {
+    static const std::optional<f32> bias = []() -> std::optional<f32> {
+        const char* text = std::getenv("LICHII_OOT_HANDHELD_LOD_BIAS");
+        if (!text) {
+            return std::nullopt;
+        }
+        char* end = nullptr;
+        const double value = std::strtod(text, &end);
+        if (end == text || !(value >= -3.0 && value < 0.0)) {
+            return std::nullopt;
+        }
+        return static_cast<f32>(value);
+    }();
+    return bias;
+}
+} // Anonymous namespace
+
 f32 TextureCacheRuntime::OcarinaFsrLodBias() {
     if (!ocarina_fsr_lod_bias) {
         const bool ocarina = Settings::GetCurrentProgramID() == 0x0400486024DEC000ULL;
         ocarina_fsr_lod_bias =
             ocarina ? VideoCommon::OcarinaFsrLodBias(ResolveOcarinaUpscaler(device)) : 0.0f;
+        // lichii-arc (LICHII_OOT_HANDHELD_LOD_BIAS=<bias>, e.g. -0.5): in handheld use this bias
+        // for the game's textures while the upscaler runs (the default bias is docked only).
+        if (*ocarina_fsr_lod_bias != 0.0f && OcarinaHandheldLodBias() &&
+            !Settings::IsDockedMode()) {
+            ocarina_fsr_lod_bias = *OcarinaHandheldLodBias();
+        }
     }
     return *ocarina_fsr_lod_bias;
 }
@@ -5025,7 +5049,7 @@ Sampler::VariantKey Sampler::MakeKey(const ImageView& image_view, bool is_depth)
     if (added_lod_bias != 0.0f) {
         const Image* const image = image_view.BackingImage();
         key.drop_lod_bias = !VideoCommon::KeepOcarinaFsrLodBias(
-            Settings::IsDockedMode(), *ocarina_fsr_failed,
+            Settings::IsDockedMode() || OcarinaHandheldLodBias().has_value(), *ocarina_fsr_failed,
             image != nullptr && True(image->flags & ImageFlagBits::GpuModified));
     }
     if (needs_swizzle_mapping && !key.drop_custom_border && !image_view.HasIdentitySwizzle()) {

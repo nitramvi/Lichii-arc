@@ -7,6 +7,7 @@
 #if __cpp_lib_chrono >= 201907L
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <stdexcept>
 #endif
@@ -101,6 +102,27 @@ void RefreshNvidiaDlssRuntimeSettings() {
         std::memory_order_relaxed);
 }
 
+std::optional<u32> OcarinaCustomRenderScaleWord() {
+    static const std::optional<u32> word = []() -> std::optional<u32> {
+        const char* text = std::getenv("LICHII_OOT_RENDER_SCALE");
+        if (!text) {
+            return std::nullopt;
+        }
+        char* end = nullptr;
+        const double scale = std::strtod(text, &end);
+        if (end == text || !(scale >= 0.5 && scale <= 1.0)) {
+            return std::nullopt;
+        }
+        const float value = static_cast<float>(scale);
+        u32 bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        // movz w9, #imm16, lsl #16 loads only the high half: round to the nearest one.
+        const u32 high = (bits + 0x8000U) >> 16;
+        return 0x52A00000U | (high << 5) | 9U;
+    }();
+    return word;
+}
+
 std::optional<NvidiaDlssQuality> OcarinaDlssRenderScale() {
     // lichii-arc: LICHII_OOT_RENDER_SCALE=ultra (1280x720) or performance (1920x1080) renders
     // Ocarina of Time's scene smaller on any GPU and mode; the render-scaled path upscales it
@@ -110,7 +132,7 @@ std::optional<NvidiaDlssQuality> OcarinaDlssRenderScale() {
         if (value == "ultra") {
             return NvidiaDlssQuality::UltraPerformance;
         }
-        if (value == "performance") {
+        if (value == "performance" || OcarinaCustomRenderScaleWord()) {
             return NvidiaDlssQuality::Performance;
         }
     }

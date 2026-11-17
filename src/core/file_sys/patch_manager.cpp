@@ -1078,6 +1078,19 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             std::memcpy(out.data() + sizeof(Loader::NSOHeader) + record.module_offset,
                         record.bytes.data(), record.bytes.size());
         }
+        // lichii-arc: LICHII_OOT_RENDER_SCALE=<number> loads that scale instead of 0.75.
+        if (patch.dlss_quality == Settings::NvidiaDlssQuality::Performance) {
+            if (const auto word = Settings::OcarinaCustomRenderScaleWord();
+                word && patch.records.size() == 1 && patch.records[0].bytes.size() == 4) {
+                const std::array<u8, 4> bytes{static_cast<u8>(*word), static_cast<u8>(*word >> 8),
+                                              static_cast<u8>(*word >> 16),
+                                              static_cast<u8>(*word >> 24)};
+                std::memcpy(out.data() + sizeof(Loader::NSOHeader) +
+                                patch.records[0].module_offset,
+                            bytes.data(), bytes.size());
+                LOG_INFO(Loader, "    - lichii-arc: custom render scale word {:#010x}", *word);
+            }
+        }
         LOG_INFO(Loader, "    - Applying built-in patch \"{}\" ({} records) to {}", patch.name,
                  patch.records.size(), name);
         applied.push_back(patch.name);
