@@ -11,6 +11,7 @@
 #include "common/lichii_diag.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "video_core/nx2.h"
 #include "video_core/fsr.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_fsr3_upscaler.h"
@@ -1289,9 +1290,54 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     state.previous_slot = &resources;
     state.previous_slot_frame = frame;
 
-    const bool reset = !state.last_frame || frame != *state.last_frame + 1 ||
-                       !std::ranges::equal(previous, state.last_view_projection,
-                                           [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    bool reset = !state.last_frame || frame != *state.last_frame + 1 ||
+                 !std::ranges::equal(previous, state.last_view_projection,
+                                     [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    // lichii-arc: how far the camera moved since the previous frame (largest change of any
+    // view-projection element). LICHII_XESS_FAST_RESET=1 drops the history above a threshold
+    // (LICHII_XESS_FAST_RESET_THRESHOLD, default 0.5) so a fast fall or whip pan does not drag
+    // stale bright pixels along; LICHII_DIAG logs the per-second peak to tune it.
+    {
+        f32 camera_delta = 0.0f;
+        for (size_t i = 0; i < current.size(); ++i) {
+            camera_delta = std::max(camera_delta, std::abs(current[i] - previous[i]));
+        }
+        static const bool fast_reset = [] {
+            const char* value = std::getenv("LICHII_XESS_FAST_RESET");
+            return value && value[0] == '1';
+        }();
+        static const f32 fast_threshold = [] {
+            const char* value = std::getenv("LICHII_XESS_FAST_RESET_THRESHOLD");
+            const f32 parsed = value ? static_cast<f32>(std::strtod(value, nullptr)) : 0.0f;
+            return parsed > 0.0f ? parsed : 0.5f;
+        }();
+        const bool fast = std::isfinite(camera_delta) && camera_delta > fast_threshold;
+        if (Common::LichiiDiag::Enabled()) {
+            static f32 peak = 0.0f;
+            static u32 fast_frames = 0;
+            static auto window_start = std::chrono::steady_clock::now();
+            peak = std::max(peak, camera_delta);
+            fast_frames += fast ? 1 : 0;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - window_start >= std::chrono::seconds{1}) {
+                LOG_INFO(Render_Vulkan,
+                         "LICHII_CAMERA frame={} peak_delta={:.3f} over_threshold_frames={} "
+                         "threshold={:.3f} fast_reset={}",
+                         frame, peak, fast_frames, fast_threshold, fast_reset ? "on" : "off");
+                peak = 0.0f;
+                fast_frames = 0;
+                window_start = now;
+            }
+        }
+        if (fast_reset && fast && !reset) {
+            reset = true;
+            if (Common::LichiiDiag::Enabled()) {
+                LOG_INFO(Render_Vulkan,
+                         "LICHII_TEMPORAL frame={} history reset: fast camera (delta {:.3f})",
+                         frame, camera_delta);
+            }
+        }
+    }
     // lichii-arc (LICHII_DIAG=1): every history reset, with its reason, to line up with marks.
     if (reset && Common::LichiiDiag::Enabled()) {
         const char* why = !state.last_frame                  ? "first temporal frame"
@@ -1445,6 +1491,11 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     state.scheduler.InvalidateState();
     state.last_frame = frame;
     state.last_view_projection = current;
+    Tegra::g_lichii_last_scene_frame_ns.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count(),
+        std::memory_order_relaxed);
     return true;
 }
 VideoCommon::OcarinaUpscaleBackend ResolveOcarinaUpscaler(const Device& device) {

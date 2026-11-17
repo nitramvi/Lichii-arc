@@ -31,6 +31,11 @@ inline std::atomic<bool> g_nx2_ampere{false};
 // known). Frame generation plans against it (FrameGenPacer).
 inline std::atomic<u64> g_nx2_guest_frame_interval_ns{0};
 
+// lichii-arc: steady_clock time (ns since epoch) of the last frame the temporal upscaler
+// evaluated, i.e. the last frame with a 3D scene. 0: none yet. LICHII_MENU_FPS uses it to tell
+// menus and videos (no scene) from gameplay.
+inline std::atomic<s64> g_lichii_last_scene_frame_ns{0};
+
 // GPU VA that nx2:gpu GetVaRange and GetUserPartition report to NVN. The in-process
 // allocator hands out addresses in [Nx2GpuVaStart, Nx2GpuVaEnd). NvRm's AllocAsEx range
 // can be smaller; the GMMU page tables still have to cover this one.

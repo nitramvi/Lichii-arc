@@ -2250,6 +2250,7 @@ private:
     // next vblank instead (title 4 ran at up to 160 fps, its timing and audio with it).
     Nx2PresentPacer m_present_pacer;
     u32 m_swap_word{};
+    bool m_lichii_menu_pacing{false};
 
     // Mario Kart World's 60 FPS mode with the 30 FPS fallback (loader/nso.cpp): the game reads its
     // frame mode from `address` each frame. Three frames in a row over 19 ms at 60 switch it to 30
@@ -2546,8 +2547,33 @@ private:
             const char* value = std::getenv("EDEN_NX2_FPS_LIMIT");
             return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
         }();
-        const u32 fps_limit =
+        u32 fps_limit =
             forced_fps_limit != 0 ? forced_fps_limit : Settings::values.fps_limit.GetValue();
+        // lichii-arc (LICHII_MENU_FPS=<fps>, e.g. 60): while no 3D scene has been drawn for 1.5 s
+        // (title, file select, its background video, loading screens) hold this rate instead of
+        // the FPS limit, so videos the game advances per frame play at their speed. Gameplay
+        // keeps the normal limit. Unset: unchanged.
+        static const u32 menu_fps = [] {
+            const char* value = std::getenv("LICHII_MENU_FPS");
+            return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
+        }();
+        if (menu_fps != 0 && fps_limit != 0 && menu_fps > fps_limit) {
+            const s64 last_scene =
+                Tegra::g_lichii_last_scene_frame_ns.load(std::memory_order_relaxed);
+            const s64 now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count();
+            const bool in_menu = last_scene == 0 || now_ns - last_scene > 1'500'000'000LL;
+            if (in_menu != m_lichii_menu_pacing) {
+                m_lichii_menu_pacing = in_menu;
+                LOG_INFO(Service, "LICHII_MENU_FPS {} ({} fps)",
+                         in_menu ? "menu/video: no 3D scene" : "3D scene: normal limit",
+                         in_menu ? menu_fps : fps_limit);
+            }
+            if (in_menu) {
+                fps_limit = menu_fps;
+            }
+        }
         // With a frame rate limit other than 60 Hz the vsync event already paces the game; holding
         // its swap interval here as well kept it at 60 fps (interval 2 of a 120 Hz event). Only an
         // explicit FPS limit still applies then.

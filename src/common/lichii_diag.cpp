@@ -548,9 +548,11 @@ void TelemetryThread() {
             have_status && status.BatteryLifePercent <= 100 ? status.BatteryLifePercent : -1;
         const double battery_w = battery.RateWatts();
         // perf_limit: Windows' "% Performance Limit" (100 = no limit; lower = throttled by
-        // power or temperature). cpu_*_mhz: real clocks; cpu_*_max_mhz: rated maximum.
+        // power or temperature). cpu_*_mhz: real clocks; cpu_*_base_mhz: rated base clock
+        // (Windows reports the base, not the turbo). gpu_temp_c: integrated GPUs (Lunar Lake)
+        // expose no GPU sensor through IGCL; thermal_zone_max_c is the package temperature.
         LOG_INFO(Common,
-                 "LICHII_TELEMETRY cpu_p_mhz={} cpu_e_mhz={} cpu_p_max_mhz={} cpu_e_max_mhz={} "
+                 "LICHII_TELEMETRY cpu_p_mhz={} cpu_e_mhz={} cpu_p_base_mhz={} cpu_e_base_mhz={} "
                  "cpu_p_util_pct={} cpu_e_util_pct={} hybrid={} cores_limited={} "
                  "perf_limit_pct={} gpu_3d_util_pct={} gpu_mhz={} gpu_w={} gpu_temp_c={} "
                  "gpu_render_pct={} gpu_busy_pct={} gpu_power_limited={} gpu_temp_limited={} "
