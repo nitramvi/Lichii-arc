@@ -231,6 +231,10 @@ void Summarize(FrameState& state, u64 now) {
         LOG_INFO(HW_GPU, "LICHII_GPU window_s={:.2f} {}",
                  static_cast<double>(now - state.window_start_ns) / 1e9,
                  Common::LichiiDiag::TakeGpuSummary());
+        const double window_s = static_cast<double>(now - state.window_start_ns) / 1e9;
+        LOG_INFO(HW_GPU, "LICHII_POWER window_s={:.2f} fps={:.1f} {}", window_s,
+                 window_s > 0 ? state.window_frames / window_s : 0.0,
+                 Common::LichiiDiag::TakeTelemetrySummary());
     }
     state.window_jit = {};
     state.window_start_ns = now;

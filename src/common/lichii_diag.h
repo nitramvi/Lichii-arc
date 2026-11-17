@@ -56,4 +56,7 @@ void AddGpuFrameSample(double busy_ms);
 /// "gpu_ms=avg:x,max:y,samples:n" for the samples since the last call (or "gpu_ms=none").
 [[nodiscard]] std::string TakeGpuSummary();
 
+/// Averages of the 2 s telemetry samples since the last call (Windows; "telemetry=none" elsewhere).
+[[nodiscard]] std::string TakeTelemetrySummary();
+
 } // namespace Common::LichiiDiag
