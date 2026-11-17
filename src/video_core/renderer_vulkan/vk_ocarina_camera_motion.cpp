@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <optional>
 
+#include "common/lichii_diag.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/fsr.h"
@@ -1291,6 +1292,14 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
     const bool reset = !state.last_frame || frame != *state.last_frame + 1 ||
                        !std::ranges::equal(previous, state.last_view_projection,
                                            [](f32 a, f32 b) { return std::abs(a - b) < 0.001f; });
+    // lichii-arc (LICHII_DIAG=1): every history reset, with its reason, to line up with marks.
+    if (reset && Common::LichiiDiag::Enabled()) {
+        const char* why = !state.last_frame                  ? "first temporal frame"
+                          : frame != *state.last_frame + 1   ? "temporal frames not consecutive"
+                                                             : "previous camera does not match";
+        LOG_INFO(Render_Vulkan, "LICHII_TEMPORAL frame={} history reset: {} (last temporal frame {})",
+                 frame, why, state.last_frame ? static_cast<s64>(*state.last_frame) : s64{-1});
+    }
 #ifdef EGLANTINE_STREAMLINE
     if (state.dlss && !state.dlss->Upscale({
             .color = {*resources.color_view, *resources.color, LIVE_COLOR_FORMAT, COLOR_RANGE,

@@ -31,6 +31,14 @@ u32 Mark();
 /// The mark waiting for the next present's frame number (0: none), cleared by the call.
 [[nodiscard]] u32 TakePendingMark();
 
+/// Frame ring: with LICHII_DIAG=1 (LICHII_DIAG_RING=0 turns it off) the renderer keeps the last
+/// LICHII_DIAG_RING_SECONDS (default 3, 1..10) of presented frames at 640x360 and writes them as
+/// PNGs when the player marks, so a flash that is gone before the mark is still on file.
+[[nodiscard]] bool RingEnabled();
+[[nodiscard]] double RingSeconds();
+/// The mark whose frame ring the renderer should write (0: none), cleared by the call.
+[[nodiscard]] u32 TakeRingDump();
+
 /// The last file of the game the guest opened, as the file system saw it.
 void NoteFileOpened(std::string_view path);
 [[nodiscard]] std::string LastFileOpened();

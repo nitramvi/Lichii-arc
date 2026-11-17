@@ -30,6 +30,7 @@ namespace Common::LichiiDiag {
 namespace {
 std::atomic<u32> g_marks{};
 std::atomic<u32> g_pending_mark{};
+std::atomic<u32> g_ring_dump{};
 
 std::mutex g_mutex;
 std::string g_last_file;
@@ -205,8 +206,33 @@ u32 Mark() {
     }
     const u32 number = g_marks.fetch_add(1, std::memory_order_relaxed) + 1;
     g_pending_mark.store(number, std::memory_order_relaxed);
+    g_ring_dump.store(number, std::memory_order_relaxed);
     LOG_INFO(Common, "LICHII_MARK {} requested (last file: {})", number, LastFileOpened());
     return number;
+}
+
+bool RingEnabled() {
+    static const bool enabled = [] {
+        if (!Enabled()) {
+            return false;
+        }
+        const char* value = std::getenv("LICHII_DIAG_RING");
+        return !(value && value[0] == '0');
+    }();
+    return enabled;
+}
+
+double RingSeconds() {
+    static const double seconds = [] {
+        const char* value = std::getenv("LICHII_DIAG_RING_SECONDS");
+        const double parsed = value ? std::atof(value) : 3.0;
+        return parsed >= 1.0 && parsed <= 10.0 ? parsed : 3.0;
+    }();
+    return seconds;
+}
+
+u32 TakeRingDump() {
+    return g_ring_dump.exchange(0, std::memory_order_relaxed);
 }
 
 u32 TakePendingMark() {

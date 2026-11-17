@@ -15,6 +15,7 @@ on:
     branches:
       - nx2-experimental
       - intel-arc
+      - mark-arc
       - compute-arc
       - final-arc
       - precompile-arc

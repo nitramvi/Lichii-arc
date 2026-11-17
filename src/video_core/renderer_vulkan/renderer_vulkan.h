@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <chrono>
+
 #include <memory>
 #include <string>
 #include <variant>
@@ -112,6 +114,9 @@ private:
                               const Layout::FramebufferLayout& layout, VkFormat format,
                               VkDeviceSize buffer_size);
     void RenderScreenshot(std::span<const Tegra::FramebufferConfig> framebuffers);
+    /// lichii-arc diagnostics: keeps the last seconds of presented frames, written on a mark.
+    void RecordDiagRing(std::span<const Tegra::FramebufferConfig> framebuffers);
+    void DumpDiagRing(u32 mark);
     void RenderAppletCaptureLayer(std::span<const Tegra::FramebufferConfig> framebuffers);
 
     std::vector<Tegra::FramebufferConfig> applet_capture_layers;
@@ -142,6 +147,7 @@ private:
     BlitScreen blit_swapchain;
     BlitScreen blit_capture;
     BlitScreen blit_applet;
+    BlitScreen blit_ring;
     RasterizerVulkan rasterizer;
 #ifdef HAS_LSFG
     FrameGen frame_gen;
@@ -158,6 +164,14 @@ private:
 
     // DrawToFrame recreates the image when the layout size or format changes.
     Frame screenshot_frame{};
+
+    // lichii-arc diagnostics frame ring (Common::LichiiDiag::RingEnabled).
+    Frame ring_frame{};
+    vk::Buffer ring_buffer;
+    u32 ring_slots{};
+    u32 ring_next{};
+    u32 ring_filled{};
+    std::vector<std::chrono::steady_clock::time_point> ring_times;
 };
 
 } // namespace Vulkan

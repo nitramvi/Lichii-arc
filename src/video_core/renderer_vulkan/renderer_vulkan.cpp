@@ -5,6 +5,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <thread>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -14,6 +18,10 @@
 #include <fmt/ranges.h>
 
 #include "common/display_hdr.h"
+#include "common/fs/fs_util.h"
+#include "common/fs/path_util.h"
+#include "common/lichii_diag.h"
+#include "common/stb.h"
 #include "common/logging.h"
 #include <ranges>
 #include "common/scope_exit.h"
@@ -215,6 +223,12 @@ try
                   present_manager,
                   scheduler,
                   PresentFiltersForAppletCapture)
+    , blit_ring(device_memory,
+                device,
+                memory_allocator,
+                present_manager,
+                scheduler,
+                PresentFiltersForDisplay)
     , rasterizer(render_window, gpu, device_memory, device, memory_allocator, state_tracker, scheduler)
 #ifdef HAS_LSFG
     , frame_gen(memory_allocator, scheduler)
@@ -301,6 +315,7 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
         VideoCommon::StutterTrace::OnPresent();
     }
     RenderScreenshot(framebuffers);
+    RecordDiagRing(framebuffers);
     const auto acquiring = trace ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
     Frame* frame = [this] {
@@ -508,6 +523,111 @@ vk::Buffer RendererVulkan::RenderToBuffer(std::span<const Tegra::FramebufferConf
     // Copy backing image data to the capture buffer
     dst_buffer.Invalidate();
     return dst_buffer;
+}
+
+namespace {
+constexpr u32 RING_WIDTH = 640;
+constexpr u32 RING_HEIGHT = 360;
+constexpr VkDeviceSize RING_FRAME_BYTES = VkDeviceSize{RING_WIDTH} * RING_HEIGHT * 4;
+} // namespace
+
+void RendererVulkan::RecordDiagRing(std::span<const Tegra::FramebufferConfig> framebuffers) {
+    if (!Common::LichiiDiag::RingEnabled()) {
+        return;
+    }
+    if (!ring_buffer) {
+        const double seconds = Common::LichiiDiag::RingSeconds();
+        ring_slots = std::clamp(static_cast<u32>(seconds * 30.0), 30u, 300u);
+        ring_buffer = CreateWrappedBuffer(memory_allocator, RING_FRAME_BYTES * ring_slots,
+                                          MemoryUsage::Download);
+        ring_times.assign(ring_slots, {});
+        LOG_INFO(Render_Vulkan,
+                 "LICHII_RING on: last {} presented frames at {}x{} ({} MiB), written on a mark",
+                 ring_slots, RING_WIDTH, RING_HEIGHT, (RING_FRAME_BYTES * ring_slots) >> 20);
+    }
+    const Layout::FramebufferLayout layout = Layout::DefaultFrameLayout(RING_WIDTH, RING_HEIGHT);
+    blit_ring.DrawToFrame(device, rasterizer, &ring_frame, framebuffers, layout, 1,
+                          VK_FORMAT_B8G8R8A8_UNORM, CaptureHdrPresent());
+    scheduler.RequestOutsideRenderPassOperationContext();
+    const VkDeviceSize offset = RING_FRAME_BYTES * ring_next;
+    scheduler.Record([image = *ring_frame.image, buffer = *ring_buffer,
+                      offset](vk::CommandBuffer cmdbuf) {
+        DownloadColorImage(cmdbuf, image, buffer, VkExtent3D{RING_WIDTH, RING_HEIGHT, 1}, offset);
+    });
+    ring_times[ring_next] = std::chrono::steady_clock::now();
+    ring_next = (ring_next + 1) % ring_slots;
+    ring_filled = std::min(ring_filled + 1, ring_slots);
+
+    if (const u32 mark = Common::LichiiDiag::TakeRingDump(); mark != 0) {
+        DumpDiagRing(mark);
+    }
+}
+
+void RendererVulkan::DumpDiagRing(u32 mark) {
+    // One stall on the mark: every recorded copy has to land before the ring is read.
+    scheduler.Finish();
+    ring_buffer.Invalidate();
+    const auto mapped = ring_buffer.Mapped();
+    const auto now = std::chrono::steady_clock::now();
+    struct RingFrame {
+        std::vector<u8> bgra;
+        s64 age_ms;
+    };
+    std::vector<RingFrame> frames;
+    frames.reserve(ring_filled);
+    for (u32 i = 0; i < ring_filled; ++i) {
+        const u32 slot = (ring_next + ring_slots - ring_filled + i) % ring_slots;
+        const u8* const begin = mapped.data() + RING_FRAME_BYTES * slot;
+        frames.push_back(RingFrame{
+            .bgra = std::vector<u8>(begin, begin + RING_FRAME_BYTES),
+            .age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - ring_times[slot])
+                          .count(),
+        });
+    }
+    const std::time_t wall = std::time(nullptr);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &wall);
+#else
+    localtime_r(&wall, &local);
+#endif
+    char stamp[32]{};
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", &local);
+    const std::filesystem::path dir =
+        Common::FS::GetEdenPath(Common::FS::EdenPath::ScreenshotsDir) /
+        fmt::format("lichii_mark_{}_{}", mark, stamp);
+    LOG_INFO(Render_Vulkan, "LICHII_RING mark {}: writing {} frames ({} ms back) to {}", mark,
+             frames.size(), frames.empty() ? 0 : frames.front().age_ms,
+             Common::FS::PathToUTF8String(dir));
+    std::thread([dir, frames = std::move(frames)]() mutable {
+        std::error_code error;
+        std::filesystem::create_directories(dir, error);
+        std::vector<u8> rgb(size_t{RING_WIDTH} * RING_HEIGHT * 3);
+        for (size_t k = 0; k < frames.size(); ++k) {
+            const auto& bgra = frames[k].bgra;
+            for (size_t p = 0; p < size_t{RING_WIDTH} * RING_HEIGHT; ++p) {
+                rgb[p * 3 + 0] = bgra[p * 4 + 2];
+                rgb[p * 3 + 1] = bgra[p * 4 + 1];
+                rgb[p * 3 + 2] = bgra[p * 4 + 0];
+            }
+            std::vector<u8> encoded;
+            const auto append = [](void* context, void* bytes, int size) {
+                auto* const out = static_cast<std::vector<u8>*>(context);
+                const auto* const data = static_cast<const u8*>(bytes);
+                out->insert(out->end(), data, data + size);
+            };
+            if (stbi_write_png_to_func(append, &encoded, RING_WIDTH, RING_HEIGHT, 3, rgb.data(),
+                                       RING_WIDTH * 3) == 0) {
+                continue;
+            }
+            const std::filesystem::path file =
+                dir / fmt::format("frame_{:03}_menos_{}ms.png", k, frames[k].age_ms);
+            std::ofstream out(file, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(encoded.data()),
+                      static_cast<std::streamsize>(encoded.size()));
+        }
+        LOG_INFO(Render_Vulkan, "LICHII_RING written: {} frames", frames.size());
+    }).detach();
 }
 
 void RendererVulkan::RenderScreenshot(std::span<const Tegra::FramebufferConfig> framebuffers) {

@@ -22,7 +22,7 @@ void UploadImage(const Device& device, MemoryAllocator& allocator, Scheduler& sc
                  vk::Image& image, VkExtent2D dimensions, VkFormat format,
                  std::span<const u8> initial_contents = {});
 void DownloadColorImage(vk::CommandBuffer& cmdbuf, VkImage image, VkBuffer buffer,
-                        VkExtent3D extent);
+                        VkExtent3D extent, VkDeviceSize buffer_offset = 0);
 void ClearColorImage(vk::CommandBuffer& cmdbuf, VkImage image);
 
 vk::ImageView CreateWrappedImageView(const Device& device, vk::Image& image, VkFormat format);

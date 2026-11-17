@@ -114,7 +114,7 @@ void UploadImage(const Device& device, MemoryAllocator& allocator, Scheduler& sc
 }
 
 void DownloadColorImage(vk::CommandBuffer& cmdbuf, VkImage image, VkBuffer buffer,
-                        VkExtent3D extent) {
+                        VkExtent3D extent, VkDeviceSize buffer_offset) {
     const VkImageMemoryBarrier read_barrier{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .pNext = nullptr,
@@ -158,7 +158,7 @@ void DownloadColorImage(vk::CommandBuffer& cmdbuf, VkImage image, VkBuffer buffe
         .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
     };
     const VkBufferImageCopy copy{
-        .bufferOffset = 0,
+        .bufferOffset = buffer_offset,
         .bufferRowLength = 0,
         .bufferImageHeight = 0,
         .imageSubresource{

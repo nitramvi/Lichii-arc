@@ -29,6 +29,7 @@
 
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 
+#include "common/lichii_diag.h"
 #include "common/assert.h"
 #include "common/dkb_frame_trace.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -3728,6 +3729,12 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
     }
     // Logs why the game's own upscale draws, when the reason changes and every 120th repeat.
     const auto fail = [this](const char* reason) {
+        // lichii-arc (LICHII_DIAG=1): every frame the temporal path falls back to the game's
+        // own upscale, to line up visual flashes with marks.
+        if (Common::LichiiDiag::Enabled()) {
+            LOG_INFO(Render_Vulkan, "LICHII_TEMPORAL frame={} game upscale: {}", render_trace_frame,
+                     reason);
+        }
         if (reason != oot_fallback_reason || ++oot_fallback_repeats % 120 == 0) {
             LOG_INFO(Render_Vulkan, "Ocarina temporal: the game's upscale draws frame {} ({})",
                      render_trace_frame, reason);
