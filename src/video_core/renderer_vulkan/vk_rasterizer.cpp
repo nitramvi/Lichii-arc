@@ -86,6 +86,23 @@
 
 namespace Vulkan {
 
+namespace {
+/// lichii-arc (LICHII_OOT_EXTRA_PASS_KEY=<hex>): treat that native program key as the game's
+/// upscale to a 16:9 target (Pass1440p), for render scales whose pass has no known key yet.
+VideoCommon::OcarinaUpscalePass LichiiFindOcarinaUpscalePass(u64 native_key, u64 shader_hash) {
+    const auto pass = VideoCommon::FindOcarinaUpscalePass(native_key, shader_hash);
+    if (pass != VideoCommon::OcarinaUpscalePass::None) {
+        return pass;
+    }
+    static const u64 extra = [] {
+        const char* value = std::getenv("LICHII_OOT_EXTRA_PASS_KEY");
+        return value ? std::strtoull(value, nullptr, 16) : 0ULL;
+    }();
+    return extra != 0 && native_key == extra ? VideoCommon::OcarinaUpscalePass::Pass1440p : pass;
+}
+} // Anonymous namespace
+
+
 using Maxwell = Tegra::Engines::Maxwell3D::Regs;
 using VideoCommon::ImageViewId;
 using VideoCommon::ImageViewType;
@@ -2490,7 +2507,7 @@ void RasterizerVulkan::DispatchCompute() {
     const auto indirect_address = kepler_compute->GetIndirectComputeAddress();
     const auto list_slot = kepler_compute->GetIndirectListSlot();
     // The full-size 1080p pass is replaced only by FSR (native AA); DLAA through it is untested.
-    const auto oot_pass = VideoCommon::FindOcarinaUpscalePass(native_key, pipeline->ShaderHash());
+    const auto oot_pass = LichiiFindOcarinaUpscalePass(native_key, pipeline->ShaderHash());
     const bool can_replace = OcarinaTemporalEnabled() &&
                              oot_pass != VideoCommon::OcarinaUpscalePass::None &&
                              pipeline->CanReplaceOcarinaUpscale() &&
@@ -2508,6 +2525,25 @@ void RasterizerVulkan::DispatchCompute() {
                              can_replace || marking_effects ? &deferred_bind : nullptr)) {
         if (kepler_compute->IsNativeMode()) throw Shader::RuntimeError("Native compute resources unavailable");
         return;
+    }
+    // lichii-arc (LICHII_DIAG=1): a dispatch that reads one shared-exponent colour image and writes
+    // one B10G11R11 image looks like the game's upscale; log unknown ones once, with their key.
+    if (Common::LichiiDiag::Enabled() && oot_pass == VideoCommon::OcarinaUpscalePass::None &&
+        pipeline->SampledImages().size() == 1 && pipeline->WrittenImages().size() == 1 &&
+        pipeline->SampledImages()[0].id && pipeline->WrittenImages()[0]) {
+        const auto& in = texture_cache.GetImageView(pipeline->SampledImages()[0].id);
+        const auto& out = texture_cache.GetImageView(pipeline->WrittenImages()[0]);
+        using VideoCore::Surface::PixelFormat;
+        if (in.format == PixelFormat::E5B9G9R9_FLOAT && out.format == PixelFormat::B10G11R11_FLOAT) {
+            static std::set<u64> seen;
+            if (seen.insert(native_key).second) {
+                LOG_INFO(Render_Vulkan,
+                         "LICHII_UPSCALE_CANDIDATE native_key={:#018x} shader={:016x} in={}x{} "
+                         "out={}x{}",
+                         native_key, pipeline->ShaderHash(), in.size.width, in.size.height,
+                         out.size.width, out.size.height);
+            }
+        }
     }
     SCOPE_EXIT {
         if (!frame_dump.Capturing()) {
@@ -3783,7 +3819,7 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
     using VideoCore::Surface::PixelFormat;
     const auto extent = oot_motion.extent;
     using enum VideoCommon::OcarinaUpscalePass;
-    const auto pass = VideoCommon::FindOcarinaUpscalePass(native_key, pipeline.ShaderHash());
+    const auto pass = LichiiFindOcarinaUpscalePass(native_key, pipeline.ShaderHash());
     const bool native_size = pass == FullSize;
     // At the DLSS Performance render scale (1920x1080) the game upscales to 2560x1440 with its
     // 3/4 pass instead (QuincyForbes' f7d0938b5b). The scale is the one the game started with,
