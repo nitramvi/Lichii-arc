@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdlib>
 #include <deque>
 #include <optional>
 #include <utility>
@@ -68,7 +69,12 @@ public:
 
     // A producer waiting on readiness may hold the images needed to drain any further.
     bool HasRoom() const {
-        return !Full();
+        // lichii-arc (LICHII_VDEC_WATERMARK=1): the readiness watermark of 8 from before #2024.
+        static const bool watermark = [] {
+            const char* value = std::getenv("LICHII_VDEC_WATERMARK");
+            return value && value[0] == '1';
+        }();
+        return watermark ? inputs.size() < 8 : !Full();
     }
 
     /// Whether SubmitInput refuses packets other than end of stream: RefuseAt or more queued.

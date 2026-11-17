@@ -1523,6 +1523,15 @@ void TextureCacheRuntime::BarrierFeedbackLoop() {
 
 VkImageView TextureCacheRuntime::ResolveColorFeedback(const ImageView& sampled,
                                                       const ImageView& attachment) {
+    // lichii-arc (LICHII_NO_COLOR_FEEDBACK_COPY=1): skip the #2024 snapshot of a 10-bit image a
+    // draw samples while rendering to it (A/B test for the file-select video flicker).
+    static const bool disabled = [] {
+        const char* value = std::getenv("LICHII_NO_COLOR_FEEDBACK_COPY");
+        return value && value[0] == '1';
+    }();
+    if (disabled) {
+        return VK_NULL_HANDLE;
+    }
     const Image* image = sampled.BackingImage();
     const auto is_2d = [](const ImageView& view) {
         return view.type == VideoCommon::ImageViewType::e2D ||

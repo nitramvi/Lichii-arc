@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <optional>
 
 #include "common/common_types.h"
@@ -49,6 +50,14 @@ public:
     // that shows frames as it gets them (Ocarina of Time) gives the older image back within a
     // present and isn't followed.
     void Released(s64 now, u64 presents) {
+        // lichii-arc (LICHII_MOVIE_NO_FOLLOW=1): don't follow the client's clock (before #2010).
+        static const bool no_follow = [] {
+            const char* value = std::getenv("LICHII_MOVIE_NO_FOLLOW");
+            return value && value[0] == '1';
+        }();
+        if (no_follow) {
+            return;
+        }
         if (offset && presents - last_acquire_presents >= PacedPresents) {
             offset = now - static_cast<s64>(last_acquired_pts);
         }
