@@ -113,6 +113,7 @@ set(SHADER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_effects_base.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_dlss_bias.comp
     ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_auto_mask.comp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ocarina_depth_mask.comp
 )
 
 if (HAIKUOS)

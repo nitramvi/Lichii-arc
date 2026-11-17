@@ -1,0 +1,100 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 450
+
+// lichii-arc LICHII_OOT_AUTO_MASK_MODE=3: the colour mask (ocarina_auto_mask.comp) misses fast
+// objects that move on their own (a door swinging open) when their colour barely changes, and the
+// motion vectors only know the camera and Link. Here the depth decides: where only the camera
+// moved, last frame's depth at the reprojected position matches the depth this pixel had then
+// (the camera transform predicts it). A door, an enemy or a projectile that moved by itself, or a
+// pixel it just uncovered, does not match: mark it so the upscaler trusts this frame there.
+//
+// Depth is the captured Zelda path's [0, 1] depth of a [-1, 1] clip range, not reversed. With
+// e = 1 - ndc_z, view distance is proportional to 1 / e for any near/far, so |e1 - e2| / min(e)
+// is the relative difference in distance: one threshold works near and far.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D scene_depth;
+layout(binding = 1) uniform sampler2D previous_depth; // last frame's copy (binding 5 then)
+layout(binding = 2) uniform sampler2D motion;
+layout(binding = 3) uniform sampler2D color_mask;
+layout(binding = 4, r16f) uniform writeonly image2D mask;
+layout(binding = 5, r32f) uniform writeonly image2D depth_copy;
+
+layout(push_constant, row_major) uniform Parameters {
+    mat4 clip_to_previous_clip;
+    vec2 jitter;
+    float threshold;
+    uint control; // bit 0: previous depth valid; bit 1: colour mask valid
+} params;
+
+const float SKY = 0.99999;
+
+// Relative distance mismatch of this pixel against last frame's depth, or 0 where it can't say
+// (sky, off screen, Link's own motion, no previous frame).
+float Mismatch(ivec2 pixel, ivec2 last, vec2 size) {
+    float depth = texelFetch(scene_depth, pixel, 0).r;
+    if (!(depth > 0.0 && depth < SKY)) {
+        return 0.0;
+    }
+    vec2 screen = (vec2(pixel) + 0.5 - params.jitter) / size;
+    vec4 clip = vec4(screen * vec2(2, -2) + vec2(-1, 1), depth * 2 - 1, 1);
+    vec4 previous = params.clip_to_previous_clip * clip;
+    if (previous.w <= 1e-6) {
+        return 0.0;
+    }
+    vec3 ndc = previous.xyz / previous.w;
+    vec2 camera = (ndc.xy - clip.xy) * vec2(0.5, -0.5) * size;
+    // Link's pixels carry skinned motion: the camera can't predict his depth. Leave him to it.
+    vec2 stored = texelFetch(motion, pixel, 0).rg;
+    if (any(greaterThan(abs(stored - camera), vec2(0.75)))) {
+        return 0.0;
+    }
+    float expected = 1.0 - ndc.z;
+    if (!(expected > 1e-7)) {
+        return 0.0;
+    }
+    vec2 history = vec2(pixel) + 0.5 + camera;
+    ivec2 center = ivec2(floor(history));
+    if (any(lessThan(center, ivec2(0))) || any(greaterThan(center, last))) {
+        return 0.0;
+    }
+    // The closest match in a 3x3 neighbourhood absorbs the jitter and depth edges.
+    float best = 1e9;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float d = texelFetch(previous_depth, clamp(center + ivec2(x, y), ivec2(0), last), 0).r;
+            if (!(d > 0.0 && d < SKY)) {
+                // Last frame saw sky here: something now stands where nothing was.
+                best = min(best, 1.0);
+                continue;
+            }
+            float e = 2.0 * (1.0 - d);
+            best = min(best, abs(e - expected) / max(min(e, expected), 1e-7));
+        }
+    }
+    return best;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(mask);
+    if (any(greaterThanEqual(pixel, size))) {
+        return;
+    }
+    imageStore(depth_copy, pixel, vec4(texelFetch(scene_depth, pixel, 0).r));
+    float value = (params.control & 2u) != 0u ? texelFetch(color_mask, pixel, 0).r : 0.0;
+    if ((params.control & 1u) != 0u) {
+        ivec2 last = size - 1;
+        vec2 extent = vec2(size);
+        float threshold = max(params.threshold, 0.001);
+        // A small dilation (this pixel and its four neighbours) covers the moving edge.
+        float mismatch = Mismatch(pixel, last, extent);
+        mismatch = max(mismatch, 0.75 * Mismatch(clamp(pixel + ivec2(1, 0), ivec2(0), last), last, extent));
+        mismatch = max(mismatch, 0.75 * Mismatch(clamp(pixel - ivec2(1, 0), ivec2(0), last), last, extent));
+        mismatch = max(mismatch, 0.75 * Mismatch(clamp(pixel + ivec2(0, 1), ivec2(0), last), last, extent));
+        mismatch = max(mismatch, 0.75 * Mismatch(clamp(pixel - ivec2(0, 1), ivec2(0), last), last, extent));
+        value = max(value, smoothstep(threshold, threshold * 2.5, mismatch));
+    }
+    imageStore(mask, pixel, vec4(value));
+}

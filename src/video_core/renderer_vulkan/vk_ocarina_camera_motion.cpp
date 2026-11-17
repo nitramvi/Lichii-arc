@@ -21,6 +21,7 @@
 #include "video_core/host_shaders/ocarina_dlss_4k_reference_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_bias_comp_spv.h"
 #include "video_core/host_shaders/ocarina_auto_mask_comp_spv.h"
+#include "video_core/host_shaders/ocarina_depth_mask_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_base_comp_spv.h"
 #include "video_core/host_shaders/ocarina_dlss_effects_comp_spv.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
@@ -655,10 +656,105 @@ u32 AutoMaskThousandths() {
 bool AutoMaskPerceptual() {
     static const bool perceptual = [] {
         const char* value = std::getenv("LICHII_OOT_AUTO_MASK_MODE");
-        return value && value[0] == '2';
+        return value && (value[0] == '2' || value[0] == '3');
     }();
     return perceptual;
 }
+
+/// lichii-arc: LICHII_OOT_AUTO_MASK_MODE=3 is mode 2 plus a depth test (ocarina_depth_mask.comp)
+/// for objects that move on their own; LICHII_OOT_DEPTH_MASK_THRESHOLD is the relative distance
+/// mismatch it starts at (default 0.05).
+bool AutoMaskDepth() {
+    static const bool depth = [] {
+        const char* value = std::getenv("LICHII_OOT_AUTO_MASK_MODE");
+        return value && value[0] == '3';
+    }();
+    return depth;
+}
+
+f32 DepthMaskThreshold() {
+    static const f32 value = [] {
+        f32 threshold = 0.05f;
+        if (const char* text = std::getenv("LICHII_OOT_DEPTH_MASK_THRESHOLD")) {
+            const f32 parsed = std::strtof(text, nullptr);
+            if (parsed > 0.0f && parsed < 10.0f) {
+                threshold = parsed;
+            }
+        }
+        return threshold;
+    }();
+    return value;
+}
+
+struct DepthMaskParameters {
+    Matrix clip_to_previous_clip;
+    std::array<f32, 2> jitter;
+    f32 threshold;
+    u32 control; ///< bit 0: previous depth valid; bit 1: colour mask valid
+};
+
+class OcarinaDepthMaskPass final : public ComputePass {
+    static constexpr auto bindings = [] {
+        std::array<VkDescriptorSetLayoutBinding, 6> result{};
+        for (u32 i = 0; i < 6; ++i) {
+            result[i] = {i, i >= 4 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE :
+                                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                         1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        }
+        return result;
+    }();
+    static constexpr auto templates = [] {
+        std::array<VkDescriptorUpdateTemplateEntry, 6> result{};
+        for (u32 i = 0; i < 6; ++i) {
+            result[i] = {i, 0, 1, bindings[i].descriptorType,
+                         i * sizeof(DescriptorUpdateEntry), sizeof(DescriptorUpdateEntry)};
+        }
+        return result;
+    }();
+    static constexpr DescriptorBankInfo bank{.textures = 4, .images = 2, .score = 6};
+    static constexpr std::array push{
+        VkPushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DepthMaskParameters)}};
+
+public:
+    OcarinaDepthMaskPass(const Device& device_, Scheduler& scheduler, DescriptorPool& pool)
+        : ComputePass(device_, scheduler, pool, bindings, templates, bank, push,
+                      OCARINA_DEPTH_MASK_COMP_SPV) {}
+
+    void Record(Scheduler& scheduler, const void* descriptors, VkImage mask, VkImage depth_copy,
+                VkExtent2D extent, const DepthMaskParameters& parameters) {
+        scheduler.Record([this, descriptors, mask, depth_copy, extent,
+                          parameters](vk::CommandBuffer cmd) {
+            const VkMemoryBarrier inputs{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            };
+            const std::array prepare{
+                ProbeBarrier(mask, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                             VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_GENERAL),
+                ProbeBarrier(depth_copy, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                             VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_GENERAL),
+            };
+            cmd.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, inputs, {}, prepare);
+            const VkDescriptorSet set = descriptor_allocator.Commit();
+            device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptors);
+            cmd.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
+            cmd.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
+            cmd.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, parameters);
+            cmd.Dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            const VkMemoryBarrier complete{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            };
+            cmd.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, complete);
+        });
+    }
+};
 
 vk::Image CreateOcarinaImage(MemoryAllocator& allocator, VkExtent2D extent, VkFormat format,
                             VkImageUsageFlags usage) {
@@ -857,6 +953,15 @@ struct OcarinaUpscaler::Impl {
     vk::ImageView auto_mask_view;
     VkExtent2D auto_mask_extent{};
     bool auto_mask_failed{};
+    // lichii-arc LICHII_OOT_AUTO_MASK_MODE=3: the depth test, its mask and last frames' depth.
+    std::unique_ptr<OcarinaDepthMaskPass> depth_mask_pass;
+    vk::Image depth_mask;
+    vk::ImageView depth_mask_view;
+    std::array<vk::Image, 2> depth_copies;
+    std::array<vk::ImageView, 2> depth_copy_views;
+    VkExtent2D depth_mask_extent{};
+    std::optional<u64> depth_copy_frame;
+    bool depth_mask_failed{};
     const OcarinaFrameSlot* previous_slot{};
     std::optional<u64> previous_slot_frame;
 
@@ -1072,10 +1177,18 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
             if (!state.auto_mask_pass) {
                 state.auto_mask_pass = std::make_unique<OcarinaEffectsPass<4>>(
                     state.device, state.scheduler, state.pool, OCARINA_AUTO_MASK_COMP_SPV);
-                LOG_INFO(Render_Vulkan,
-                         "Ocarina automatic responsive mask on (threshold {:.3f}, mode {})",
-                         static_cast<f32>(AutoMaskThousandths()) / 1000.0f,
-                         AutoMaskPerceptual() ? 2 : 1);
+                if (AutoMaskDepth()) {
+                    LOG_INFO(Render_Vulkan,
+                             "Ocarina automatic responsive mask on (threshold {:.3f}, mode 3, "
+                             "depth threshold {:.3f})",
+                             static_cast<f32>(AutoMaskThousandths()) / 1000.0f,
+                             DepthMaskThreshold());
+                } else {
+                    LOG_INFO(Render_Vulkan,
+                             "Ocarina automatic responsive mask on (threshold {:.3f}, mode {})",
+                             static_cast<f32>(AutoMaskThousandths()) / 1000.0f,
+                             AutoMaskPerceptual() ? 2 : 1);
+                }
             }
             if (!state.auto_mask || state.auto_mask_extent.width != extent.width ||
                 state.auto_mask_extent.height != extent.height) {
@@ -1115,6 +1228,62 @@ bool OcarinaUpscaler::Record(VkImageView color, VkImageView depth, VkImageView t
                                      extent, control);
         mask_view = *state.auto_mask_view;
         mask_image = *state.auto_mask;
+    }
+    if (AutoMaskDepth() && mask_view && !state.depth_mask_failed) {
+        try {
+            if (!state.depth_mask_pass) {
+                state.depth_mask_pass = std::make_unique<OcarinaDepthMaskPass>(
+                    state.device, state.scheduler, state.pool);
+            }
+            if (!state.depth_mask || state.depth_mask_extent.width != extent.width ||
+                state.depth_mask_extent.height != extent.height) {
+                if (state.depth_mask) {
+                    state.scheduler.Finish(); // the old images may still be in use
+                }
+                constexpr VkImageUsageFlags usage =
+                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                state.depth_mask = CreateOcarinaImage(state.allocator, extent, BIAS_FORMAT, usage);
+                state.depth_mask_view =
+                    CreateOcarinaView(state.device, *state.depth_mask, BIAS_FORMAT);
+                for (size_t i = 0; i < 2; ++i) {
+                    state.depth_copies[i] = CreateOcarinaImage(state.allocator, extent,
+                                                               VK_FORMAT_R32_SFLOAT, usage);
+                    state.depth_copy_views[i] = CreateOcarinaView(
+                        state.device, *state.depth_copies[i], VK_FORMAT_R32_SFLOAT);
+                }
+                state.depth_mask_extent = extent;
+                state.depth_copy_frame.reset();
+            }
+        } catch (const vk::Exception& error) {
+            LOG_WARNING(Render_Vulkan, "Ocarina depth mask unavailable ({}); continuing without",
+                        error.what());
+            state.depth_mask_failed = true;
+        }
+        if (!state.depth_mask_failed && state.depth_mask_view) {
+            const bool has_previous = state.depth_copy_frame && *state.depth_copy_frame + 1 == frame;
+            const size_t write = frame % 2;
+            const DepthMaskParameters parameters{
+                .clip_to_previous_clip = *transform,
+                .jitter = jitter,
+                .threshold = DepthMaskThreshold(),
+                .control = (has_previous ? 1U : 0U) | 2U,
+            };
+            state.scheduler.RequestOutsideRenderPassOperationContext();
+            state.queue.Acquire(state.scheduler, 6);
+            state.queue.AddSampledImage(depth, sampler);
+            state.queue.AddSampledImage(has_previous ? *state.depth_copy_views[write ^ 1] : depth,
+                                        sampler);
+            state.queue.AddSampledImage(*resources.motion_view, sampler);
+            state.queue.AddSampledImage(mask_view, sampler);
+            state.queue.AddImage(*state.depth_mask_view);
+            state.queue.AddImage(*state.depth_copy_views[write]);
+            state.depth_mask_pass->Record(state.scheduler, state.queue.UpdateData(),
+                                          *state.depth_mask, *state.depth_copies[write], extent,
+                                          parameters);
+            state.depth_copy_frame = frame;
+            mask_view = *state.depth_mask_view;
+            mask_image = *state.depth_mask;
+        }
     }
     state.previous_slot = &resources;
     state.previous_slot_frame = frame;
