@@ -11,7 +11,7 @@
 #include <fmt/format.h>
 
 #include "common/game_file_trace.h"
-#include "common/logging/log.h"
+#include "common/logging.h"
 #include "video_core/shader_provenance.h"
 
 namespace VideoCommon::ShaderProvenance {
