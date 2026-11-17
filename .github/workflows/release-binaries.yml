@@ -23,6 +23,7 @@ on:
       - invent-h
       - invent-x
       - invent-efhx
+      - invent-b
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"

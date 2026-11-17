@@ -30,6 +30,7 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
+#include "video_core/shader_provenance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_binaries.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -737,7 +738,19 @@ GraphicsPipeline::GraphicsPipeline(
             }
             const VkRenderPass render_pass{render_pass_cache.Get(MakeRenderPassKey(key.state, device))};
             Validate();
-            if (library_cache) {
+            // lichii-arc LICHII_TESS_FALLBACK=1: a tessellated pipeline built while the game
+            // runs holds its draws for the whole driver build (0.7-1.3 s on an Arc 140V, mostly
+            // the pre-rasterization library of the vertex and tessellation stages, which the
+            // precache does not warm). It is built like the fast first build instead: unoptimized
+            // and monolithic first (its draws wait only for that), then optimized in the
+            // background, swapped in at a later draw. Draws are never skipped.
+            const bool tess_fast = TessFallbackEnabled() && worker_only_build && build_jobs &&
+                                   !mesh_emulation && !libraries_only &&
+                                   (spv_modules[1] || spv_modules[2]);
+            if (tess_fast && library_cache) {
+                UseMonolithicLayout();
+            }
+            if (library_cache && !tess_fast) {
                 const bool has_module = std::ranges::any_of(
                     spv_modules, [](const vk::ShaderModule& module) { return bool(module); });
                 bool made{};
@@ -850,7 +863,7 @@ GraphicsPipeline::GraphicsPipeline(
                     LOG_INFO(Render_Vulkan, "Nx2Perf smart_fast: {:016x} found in the driver cache",
                              key.Hash());
                 }
-            } else if ((FastFirstBuildEnabled() ||
+            } else if ((FastFirstBuildEnabled() || tess_fast ||
                         (SmartFastBuildEnabled() && device.IsPipelineCreationCacheControlEnabled())) &&
                        worker_only_build && build_jobs && !mesh_emulation) {
                 // Mesh emulation builds its compute pipelines inside MakePipeline, so
@@ -869,7 +882,7 @@ GraphicsPipeline::GraphicsPipeline(
                         .jobs = build_jobs,
                         .priority = VideoCommon::ShaderJobPriority::Background,
                     },
-                    [this, render_pass, fast_ms] {
+                    [this, render_pass, fast_ms, tess_fast] {
                     const auto optimized_begin = std::chrono::steady_clock::now();
                     optimized_pipeline = MakePipeline(render_pass, false);
                     for (vk::ShaderModule& module : spv_modules) {
@@ -883,8 +896,9 @@ GraphicsPipeline::GraphicsPipeline(
                     if (optimized_ms > 100.0 || fast_ms > 100.0 || logged.fetch_add(1) < 400) {
                         LOG_INFO(Render_Vulkan,
                                  "Nx2Perf fast_first: {:016x} fast build {:.1f} ms, optimized build "
-                                 "{:.1f} ms",
-                                 key.Hash(), fast_ms, optimized_ms);
+                                 "{:.1f} ms{}",
+                                 key.Hash(), fast_ms, optimized_ms,
+                                 tess_fast ? " (lichii-arc tessellation fallback)" : "");
                     }
                 });
             } else {
@@ -935,6 +949,9 @@ GraphicsPipeline::GraphicsPipeline(
                          "Nx2Perf async_pipelines: {:016x} worker emission and driver build {:.1f} ms",
                          key.Hash(), std::chrono::duration<double, std::milli>(elapsed).count());
             }
+            VideoCommon::ShaderProvenance::NoteSlowBuild(
+                VideoCommon::ShaderProvenance::Kind::Graphics, key.Hash(),
+                std::chrono::duration<double, std::milli>(elapsed).count());
         }
         // lichii-arc: a precompiled pipeline is prepared in the driver's caches; one that still
         // takes long was compiled again (the driver or Lichii's Vulkan cache lost it).
@@ -3146,6 +3163,11 @@ bool GraphicsPipeline::MakeLibraryPipeline(VkRenderPass render_pass) {
 }
 
 void GraphicsPipeline::FallBackToMonolithic(VkRenderPass render_pass) {
+    UseMonolithicLayout();
+    pipeline = MakePipeline(render_pass, false);
+}
+
+void GraphicsPipeline::UseMonolithicLayout() {
     // The stages were emitted with one set per stage: keep the sets, with a layout a monolithic
     // pipeline accepts (no independent sets, no null set layouts).
     fallback_empty_set_layout = device.GetLogical().CreateDescriptorSetLayout({
@@ -3165,7 +3187,6 @@ void GraphicsPipeline::FallBackToMonolithic(VkRenderPass render_pass) {
     shader_libraries = {};
     vertex_input_library.reset();
     fragment_output_library.reset();
-    pipeline = MakePipeline(render_pass, false);
 }
 
 void GraphicsPipeline::Validate() {

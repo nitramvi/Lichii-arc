@@ -275,6 +275,26 @@ private:
 
     /// Cancels the v2 prebuild and waits for its running stages
     void StopBackgroundJobs();
+
+    /// lichii-arc zone prewarm (LICHII_ZONE_PREWARM): cached graphics records left for their
+    /// first draw, by key hash, queued for a background build when the guest reads a game file
+    /// that earlier sessions' shader provenance ties to them.
+    struct ZoneRecord {
+        GraphicsPipelineCacheKey key;
+        u64 record_key{};
+        u64 offset{};
+        u64 payload_size{};
+        std::vector<u8> payload;
+    };
+    struct ZoneState {
+        std::mutex mutex;
+        bool active{};
+        PipelineCache* cache{};
+        std::unordered_map<u64, ZoneRecord> records;
+        size_t queued{};
+    };
+    static void OnGameFile(const std::shared_ptr<ZoneState>& zone, const std::string& file);
+    void StopZonePrewarm();
     struct PrecompiledRecord;
 
     /// The compute counterpart of CreatePrecompiledGraphicsPipeline: an entry without a
@@ -415,6 +435,7 @@ private:
     /// IR of the pipelines whose job emits their SPIR-V
     QueuedIrBudget queued_ir{VideoCommon::DefaultShaderJobBudget()};
     std::optional<ScheduledPrebuild<GraphicsPipelineCacheKey, GraphicsPipeline>> scheduled_prebuild;
+    std::shared_ptr<ZoneState> zone_prewarm;
     /// When the boot load that started the background prebuild began, until the prebuild is done
     std::optional<std::chrono::steady_clock::time_point> prebuild_load_begin;
 

@@ -11,6 +11,7 @@
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/filesystem/fsp/fs_read_throttle.h"
+#include "core/hle/service/filesystem/fsp/fs_romfs_trace.h"
 #include "core/hle/service/service.h"
 
 namespace Service::FileSystem {
@@ -21,6 +22,7 @@ public:
 
 private:
     FileSys::VirtualFile backend;
+    RomfsReadTrace romfs_trace;
 
     ReadThrottle throttle;
     std::chrono::steady_clock::time_point next_read_tick{};
