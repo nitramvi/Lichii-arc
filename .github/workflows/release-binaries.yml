@@ -16,6 +16,7 @@ on:
       - nx2-experimental
       - intel-arc
       - mark-arc
+      - upd-arc
       - compute-arc
       - final-arc
       - precompile-arc

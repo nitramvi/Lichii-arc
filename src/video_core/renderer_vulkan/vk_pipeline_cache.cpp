@@ -778,7 +778,7 @@ vk::ShaderModule EmitComputeModule(const Device& device, const Shader::Profile& 
     if (code_out) {
         *code_out = module_code;
     }
-    vk::ShaderModule spv_module{BuildShader(device, module_code)};
+    vk::ShaderModule spv_module{BuildGuestShader(device, module_code, shader_hash)};
 
     // Text log + .spv dump. Same split as the graphics path.
     const bool should_log = GPU::Logging::IsActive();
@@ -794,11 +794,6 @@ vk::ShaderModule EmitComputeModule(const Device& device, const Shader::Profile& 
             GPU::Logging::DumpSpirvShader(shader_hash,
                                           std::span<const u32>(code.data(), code.size()));
         }
-    }
-
-    if (device.HasDebuggingToolAttached()) {
-        const auto name{fmt::format("Shader {:016x}", shader_hash)};
-        spv_module.SetObjectNameEXT(name.c_str());
     }
     return spv_module;
 }
@@ -1875,6 +1870,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         /// Older sessions' used pipelines in the prebuild, shown in the load's progress
         size_t older_used{};
         bool has_loaded{};
+        DriverBuildTimes driver_builds;
         std::unique_ptr<PipelineStatistics> statistics;
         /// Records the load never chooses, as in the old cache; begin is the index in records
         std::vector<VideoCommon::PipelineRecord> incomplete;
@@ -2238,8 +2234,11 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                         return {};
                     }
                     return [this, &state, &built_one, key, entry = std::move(entry)]() mutable {
+                        const auto begin = std::chrono::steady_clock::now();
                         entry.pipeline->Build();
+                        const auto elapsed = std::chrono::steady_clock::now() - begin;
                         std::scoped_lock driver_lock{state.mutex};
+                        state.driver_builds.Add(elapsed);
                         state.compute_built += entry.pipeline->IsBound() ? 1 : 0;
                         compute_cache.emplace(key, std::move(entry));
                         built_one();
@@ -2281,8 +2280,11 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
                     }
                     return [this, &state, &built_one, key,
                             pipeline = std::move(pipeline)]() mutable {
+                        const auto begin = std::chrono::steady_clock::now();
                         pipeline->Build();
+                        const auto elapsed = std::chrono::steady_clock::now() - begin;
                         std::scoped_lock lock{state.mutex};
+                        state.driver_builds.Add(elapsed);
                         state.graphics_built += pipeline->Failed() ? 0 : 1;
                         graphics_cache.emplace(key, std::move(pipeline));
                         built_one();
@@ -2399,7 +2401,8 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             "Shader cache v2 boot load{}: {:.1f} s, {} of {} compute and {} of {} graphics "
             "pipelines built ({}{}), {} only older sessions used and {} more cached graphics "
             "pipelines skipped at boot, {} admitted for background prebuild (older sessions' "
-            "first, then newest first), {} left for their first draw (prebuild limit {})",
+            "first, then newest first), {} left for their first draw (prebuild limit {}); driver "
+            "build times: {}",
             stop_loading.stop_requested() ? " stopped" : "",
             std::chrono::duration<double>(std::chrono::steady_clock::now() - load_begin).count(),
             state.compute_built, state.total - queued_graphics, state.graphics_built,
@@ -2407,7 +2410,7 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             build_all ? fmt::format(", {} more by build_all_cached_shaders", queued_spare) : "",
             older_admitted + older_left, skipped_pipelines, deferred_pipelines,
             older_left + skipped_pipelines - (deferred_pipelines - older_admitted),
-            prebuild_limit);
+            prebuild_limit, state.driver_builds.Summary());
     }
 
     std::vector<DuplicateGraphicsRecord> no_duplicates;
@@ -4315,12 +4318,12 @@ void PipelineCache::TickFrame() {
             LOG_INFO(Render_Vulkan,
                      "Background prebuild done {:.1f} s after the boot load began: {} built, {} "
                      "failed, {} taken by draws before they finished, {} built ones no draw has "
-                     "taken yet",
+                     "taken yet; driver build times: {}",
                      std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                                    *prebuild_load_begin)
                          .count(),
                      outcome->built, outcome->failed, outcome->taken_unfinished,
-                     outcome->unclaimed);
+                     outcome->unclaimed, outcome->driver_builds.Summary());
             prebuild_load_begin.reset();
         }
     }
@@ -4472,31 +4475,8 @@ bool PipelineCache::CurrentTargetIsRedrawn() {
     return last_target_redrawn;
 }
 
-/// Returns `pipeline` when it is built or the current draw must wait for it, and nullptr when the
-/// draw may be skipped while it builds (asynchronous shaders; native draws only with
-/// EDEN_NX2_ASYNC_DISCARD=1; heavy pipelines with EDEN_NX2_HEAVY_SKIP). Each nullptr returned for
-/// an unbuilt pipeline is counted for the log.
-GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
-    static const size_t heavy_skip_words = HeavySkipWords();
-    // Tracked on every draw so a target's history is known before a heavy pipeline needs it.
-    const bool redrawn = heavy_skip_words != 0 && CurrentTargetIsRedrawn();
-    if (pipeline->IsBuilt()) {
-        if (pipeline->heavy_skipped_draws != 0) {
-            LOG_INFO(Render_Vulkan,
-                     "Nx2Perf heavy_skip: {:016x} ({} instructions) built, {} draws skipped over "
-                     "{:.0f} ms",
-                     pipeline->KeyHash(), pipeline->SourceWords(), pipeline->heavy_skipped_draws,
-                     std::chrono::duration<double, std::milli>(
-                         std::chrono::steady_clock::now() - pipeline->heavy_skip_begin)
-                         .count());
-            pipeline->heavy_skipped_draws = 0;
-        }
-        return pipeline;
-    }
-    if (!use_asynchronous_shaders) {
-        return pipeline;
-    }
-    // EDEN_NX2_ASYNC_DISCARD=1: skip native draws whose pipeline is still building instead of
+NativePendingMode PipelineCache::NativeMode() const {
+    // EDEN_NX2_ASYNC_DISCARD=1: skip native work whose pipeline is still building instead of
     // waiting for it (experimental; the draw may be missing for a frame or more).
     /// Reads EDEN_NX2_ASYNC_DISCARD once and logs when it is on.
     static const bool discard_native = [] {
@@ -4507,119 +4487,70 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
         }
         return enabled;
     }();
+    // The environment variable wins over the setting; the setting is read per call.
+    if (discard_native) {
+        return NativePendingMode::Skip;
+    }
+    switch (Settings::values.native_async_draws.GetValue()) {
+    case Settings::NativeAsyncDraws::Bounded:
+        return NativePendingMode::Bounded;
+    case Settings::NativeAsyncDraws::Skip:
+        return NativePendingMode::Skip;
+    default:
+        return NativePendingMode::Wait;
+    }
+}
+GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
+    if (pipeline->IsBuilt()) {
+        return pipeline;
+    }
+    if (!use_asynchronous_shaders) {
+        return pipeline;
+    }
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
     const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
-    pipeline->hold_reason = !native || heavy_skip_words == 0 ? 0 : 1;
-    {
-        const auto& regs = maxwell3d->regs;
-        const bool color = regs.rt_control.count > 0 &&
-                           regs.rt[0].format != Tegra::RenderTargetFormat::NONE;
-        pipeline->hold_target_color = color;
-        pipeline->hold_target_width = color ? regs.rt[0].width : regs.zeta_size.width;
-        pipeline->hold_target_height = color ? regs.rt[0].height : regs.zeta_size.height;
-    }
-    if (native && heavy_skip_words != 0 && pipeline->SourceWords() >= heavy_skip_words) {
-        // A heavy pipeline takes the driver 0.5-5 s to build; its draws are skipped meanwhile
-        // unless skipping would lose data for good.
-        if (pipeline->WritesStorage() || pipeline->UsesTransformFeedback()) {
-            pipeline->hold_reason = 2;
-            ++heavy_skip_counters.held_storage;
-            return pipeline;
-        }
-        if (!redrawn) {
-            if (last_target_reason == TargetReason::NotCleared) {
-                pipeline->hold_reason = 3;
-                ++heavy_skip_counters.held_not_cleared;
-            } else {
-                pipeline->hold_reason = 4;
-                ++heavy_skip_counters.held_new_target;
-            }
-            return pipeline;
-        }
-        if (pipeline->heavy_skipped_draws++ == 0) {
-            pipeline->heavy_skip_begin = std::chrono::steady_clock::now();
-            ++heavy_skip_counters.pipelines;
-        }
-        ++heavy_skip_counters.draws;
-        return nullptr;
-    }
-    // The environment variable wins over the setting; the setting is read per call.
-    NativePendingMode mode = NativePendingMode::Wait;
-    if (native) {
-        switch (Settings::values.native_async_draws.GetValue()) {
-        case Settings::NativeAsyncDraws::Bounded:
-            mode = NativePendingMode::Bounded;
-            break;
-        case Settings::NativeAsyncDraws::Skip:
-            mode = NativePendingMode::Skip;
-            break;
-        default:
-            break;
-        }
-        if (discard_native) {
-            mode = NativePendingMode::Skip;
-        }
-    }
+    const NativePendingMode mode = native ? NativeMode() : NativePendingMode::Wait;
+    const auto& regs = maxwell3d->regs;
+    // A native draw counts as depth-tested only when every render target it writes color into
+    // was first written in an earlier frame, which the title redraws every frame: Mario Kart World
+    // bakes terrain once with depth-tested draws (b7980efd7), and a bound depth buffer alone
+    // doesn't test (Eglantine #874). Mesh draws always wait.
+    const auto writes_color = [&regs](u32 rt_index) {
+        return rt_index < Maxwell::NumRenderTargets &&
+               regs.rt[rt_index].format != Tegra::RenderTargetFormat::NONE &&
+               regs.color_mask[regs.color_mask_common ? 0 : rt_index].raw != 0;
+    };
+    const bool depth_tested =
+        native ? mode != NativePendingMode::Wait && regs.zeta_enable != 0 &&
+                     regs.depth_test_enable != 0 && !regs.IsMeshEnabled() &&
+                     ColorWritesHaveHistory(
+                         std::min<u32>(regs.rt_control.count,
+                                       static_cast<u32>(Maxwell::NumRenderTargets)),
+                         [&regs](u32 i) { return regs.rt_control.Map(i); }, writes_color,
+                         [this](u32 rt_index) {
+                             return texture_cache.ColorTargetWrittenBeforeThisFrame(rt_index);
+                         })
+               : regs.zeta_enable != 0;
     // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
     const bool can_discard = CanDiscardPendingDraw(
-        native, maxwell3d->regs.zeta_enable != 0, draw_state.draw_element_count,
-        draw_state.draw_element_count, native && mode != NativePendingMode::Wait);
+        native, depth_tested, draw_state.draw_element_count, draw_state.draw_element_count,
+        native && mode != NativePendingMode::Wait);
     bool discard = can_discard;
     if (native) {
         switch (DecideNativePending(mode, can_discard, native_wait_budget_us)) {
         case NativeDrawAction::Wait:
             discard = false;
-            // Intel Arc: a draw the heuristic keeps still waits, but only up to a per-frame cap,
-            // like yuzu never blocking a frame for seconds. Wait mode keeps upstream behaviour.
-            if (mode != NativePendingMode::Wait && native_hard_wait_cap_us > 0) {
-                const auto begin = std::chrono::steady_clock::now();
-                const bool built = native_hard_wait_budget_us > 0 &&
-                                   pipeline->WaitBuilt(
-                                       std::chrono::microseconds{native_hard_wait_budget_us});
-                const auto spent = std::chrono::duration_cast<std::chrono::microseconds>(
-                                       std::chrono::steady_clock::now() - begin)
-                                       .count();
-                native_hard_wait_budget_us -= spent;
-                native_hard_wait_used_us += spent;
-                if (!built) {
-                    discard = true;
-                    ++native_hard_wait_skips;
-                }
-                static auto hard_window = std::chrono::steady_clock::now();
-                if (std::chrono::steady_clock::now() - hard_window > std::chrono::seconds{10}) {
-                    LOG_INFO(Render_Vulkan,
-                             "Intel capped wait: {:.1f} ms waited, {} kept draws skipped in the "
-                             "last 10 s (cap {} ms per frame)",
-                             static_cast<double>(native_hard_wait_used_us) / 1000.0,
-                             native_hard_wait_skips, native_hard_wait_cap_us / 1000);
-                    native_hard_wait_used_us = 0;
-                    native_hard_wait_skips = 0;
-                    hard_window = std::chrono::steady_clock::now();
-                }
-            }
             break;
         case NativeDrawAction::Skip:
             discard = true;
             break;
         case NativeDrawAction::WaitTimed: {
-            const auto begin = std::chrono::steady_clock::now();
             const bool built =
-                pipeline->WaitBuilt(std::chrono::microseconds{native_wait_budget_us});
-            const auto spent = std::chrono::duration_cast<std::chrono::microseconds>(
-                                   std::chrono::steady_clock::now() - begin)
-                                   .count();
-            native_wait_budget_us -= spent;
-            native_wait_used_us += spent;
-            static auto window = std::chrono::steady_clock::now();
-            if (std::chrono::steady_clock::now() - window > std::chrono::seconds{10}) {
-                LOG_INFO(Render_Vulkan,
-                         "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms "
-                         "per frame)",
-                         static_cast<double>(native_wait_used_us) / 1000.0,
-                         Settings::values.native_pipeline_wait_ms.GetValue());
-                native_wait_used_us = 0;
-                window = std::chrono::steady_clock::now();
-            }
+                WaitWithinBudget(native_wait_budget_us, native_wait_used_us,
+                                 [&](std::chrono::microseconds timeout) {
+                                     return pipeline->WaitBuilt(timeout);
+                                 });
+            LogBoundedWaits();
             if (built) {
                 return pipeline;
             }
@@ -4638,6 +4569,42 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
         }
     }
     return discard ? nullptr : pipeline;
+}
+
+bool PipelineCache::SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_hold_gpu_data) {
+    if (!use_asynchronous_shaders) {
+        return false;
+    }
+    const NativePendingMode mode = NativeMode();
+    switch (DecideNativePending(mode, outputs_hold_gpu_data, native_wait_budget_us)) {
+    case NativeDrawAction::Wait:
+        if (mode != NativePendingMode::Wait && pipeline.FirstWaitForBuild()) {
+            LOG_INFO(Render_Vulkan,
+                     "Compute pipeline {:016x} is still building: its dispatch waits, its outputs "
+                     "hold no earlier shader results",
+                     pipeline.ShaderHash());
+        }
+        return false;
+    case NativeDrawAction::WaitTimed: {
+        const bool built = WaitWithinBudget(native_wait_budget_us, native_wait_used_us,
+                                            [&](std::chrono::microseconds timeout) {
+                                                return pipeline.WaitBuilt(timeout);
+                                            });
+        LogBoundedWaits();
+        if (built) {
+            return false;
+        }
+        break;
+    }
+    case NativeDrawAction::Skip:
+        break;
+    }
+    static std::atomic<u64> skipped{};
+    if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
+        LOG_INFO(Render_Vulkan, "Async shaders: {} compute dispatches skipped for unbuilt pipelines",
+                 skipped.load(std::memory_order_relaxed));
+    }
+    return true;
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::RebuildGraphicsPipeline(KeptGraphicsStages kept) {
@@ -6199,6 +6166,12 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     }
 
     auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
+    // Compute has eight constant buffers. The Ampere lowering reads NVN2's root tables (banks
+    // 24-31) from bank 17, which only the 3D engine provides.
+    if (program.info.constant_buffer_mask >> Tegra::Engines::KeplerCompute::NumConstBuffers) {
+        throw Shader::RuntimeError("Compute program reads constant buffer mask {:#x}",
+                                   program.info.constant_buffer_mask);
+    }
     const VkDriverIdKHR driver_id = device.GetDriverID();
     const bool needs_shared_mem_clamp =
         driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
