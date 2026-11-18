@@ -2506,10 +2506,9 @@ void RasterizerVulkan::DispatchCompute() {
     };
     const auto indirect_address = kepler_compute->GetIndirectComputeAddress();
     const auto list_slot = kepler_compute->GetIndirectListSlot();
+    const auto oot_pass = LichiiFindOcarinaUpscalePass(native_key, pipeline->ShaderHash());
     const bool can_replace =
-        OcarinaTemporalEnabled() &&
-        LichiiFindOcarinaUpscalePass(native_key, pipeline->ShaderHash()) !=
-            VideoCommon::OcarinaUpscalePass::None &&
+        OcarinaTemporalEnabled() && oot_pass != VideoCommon::OcarinaUpscalePass::None &&
         pipeline->CanReplaceOcarinaUpscale() && !indirect_address && !list_slot &&
         !frame_dump.Capturing();
     // Until a dispatch overwrites the scene, each direct one binds only after the effects are
