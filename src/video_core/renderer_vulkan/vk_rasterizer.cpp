@@ -3845,7 +3845,12 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
     const bool three_quarter_1440p = pass == ThreeQuarter &&
                                      oot_performance_scale && target.size.width == 2560 &&
                                      target.size.height == 1440;
-    const bool pass_1440p = pass == Pass1440p || three_quarter_1440p;
+    // lichii-arc: with LICHII_OOT_RENDER_SCALE=<number> the game's 3/4 pass takes a scene that is
+    // not 3/4 of its target (e.g. 1589x894 into 1920x1080): check it like the 16:9 pass.
+    const bool custom_three_quarter =
+        pass == ThreeQuarter && Settings::OcarinaCustomRenderScaleWord().has_value() &&
+        !(target.size.width == extent.width * 4 / 3 && target.size.height == extent.height * 4 / 3);
+    const bool pass_1440p = pass == Pass1440p || three_quarter_1440p || custom_three_quarter;
     // lichii-arc: LICHII_OOT_FSR_1440=1 writes the reconstruction into the game's own 2560x1440
     // target, as the game's pass does, instead of a separate 3840x2160 image (a 2.25x larger
     // reconstruction a 1920x1200 handheld screen can't show).

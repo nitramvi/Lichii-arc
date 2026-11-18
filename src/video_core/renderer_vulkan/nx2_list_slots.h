@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -87,7 +88,13 @@ class Nx2ListSlots {
     /// Any thread: whether [device_addr, +size) holds an owed word. The back, about once per
     /// uniform bind, asks without the lock.
     [[nodiscard]] bool Owes(DAddr device_addr, u64 size) const {
-        if (VideoCommon::GpuSplit::OnBackThread()) {
+        // lichii-arc (LICHII_OWED_LOCK=1): keep the locked check on the back too, as before #1953.
+        // The lock-free read made Ocarina's file-select background video flash dark on Intel Arc.
+        static const bool locked = [] {
+            const char* value = std::getenv("LICHII_OWED_LOCK");
+            return value && value[0] == '1';
+        }();
+        if (!locked && VideoCommon::GpuSplit::OnBackThread()) {
             return owed.OverlapsOnBack(device_addr, size);
         }
         return owed.Overlaps(device_addr, size);
