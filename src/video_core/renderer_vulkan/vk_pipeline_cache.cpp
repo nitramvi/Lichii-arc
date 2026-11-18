@@ -4500,6 +4500,19 @@ NativePendingMode PipelineCache::NativeMode() const {
         return NativePendingMode::Wait;
     }
 }
+void PipelineCache::LogBoundedWaits() {
+    static auto window = std::chrono::steady_clock::now();
+    if (std::chrono::steady_clock::now() - window <= std::chrono::seconds{10}) {
+        return;
+    }
+    LOG_INFO(Render_Vulkan,
+             "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms per frame)",
+             static_cast<double>(native_wait_used_us) / 1000.0,
+             Settings::values.native_pipeline_wait_ms.GetValue());
+    native_wait_used_us = 0;
+    window = std::chrono::steady_clock::now();
+}
+
 GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
     if (pipeline->IsBuilt()) {
         return pipeline;
