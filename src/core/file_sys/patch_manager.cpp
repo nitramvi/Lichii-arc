@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -72,7 +73,19 @@ struct BuiltinPatch {
     // Applies only with NVIDIA DLSS on at this quality in docked mode, and is not listed in
     // Add-Ons.
     std::optional<Settings::NvidiaDlssQuality> dlss_quality{};
+    // lichii-arc: applies only when this environment variable is 1 (off by default), and is only
+    // listed in Add-Ons then.
+    std::string_view enable_env{};
 };
+
+bool BuiltinPatchEnvEnabled(const BuiltinPatch& patch) {
+    if (patch.enable_env.empty()) {
+        return true;
+    }
+    const std::string env_name{patch.enable_env};
+    const char* value = std::getenv(env_name.c_str());
+    return value != nullptr && value[0] == '1' && value[1] == '\0';
+}
 
 constexpr std::string_view MAX_RESOLUTION_NAME = "Max Resolution (built-in)";
 
@@ -415,6 +428,32 @@ constexpr std::array FPS_UNLOCK_STATES{
     BuiltinPatchState{0x4E9EE00, 0x110},
 };
 
+// lichii-arc: LICHII_OOT_TEX_GAP=1 lets the game's texture heap tidy-up (its own Compaction thread)
+// start at most once a second instead of at every frame no round runs. Every texture a round moves
+// is made again at its new address: for us a new image, a new upload and new descriptors, which is
+// what fills the texture cache and costs frames when the heap sits at its free line (the market,
+// busy areas). The round itself is the game's and a started round always finishes; the one risk is
+// a more fragmented heap between rounds. Idea and guest code from Fritchii (Frizti/fritchii
+// 0c69e3ad74 + cf8802206d, after Longshot PR #1478 by GummiNaomi, GPL-3.0); off by default here.
+// tbz w8, #1, 0x777288 at main+0x777278 branches to:
+//   tbz w8, #1, skip ; x9 = cntpct ; x8 = x9 - [last] ; x8 < 19.2 M: skip ;
+//   [last] = x9 ; b 0x77727c (ask) ; skip: b 0x777288
+// x8-x11 and the flags are dead at both targets. State: the last ask's counter value.
+constexpr std::array<u8, 4> TEX_GAP_ORIGINAL{0x88, 0x00, 0x08, 0x36}; // tbz w8, #1, 0x777288
+constexpr std::array<u8, 4> TEX_GAP_HOOK{0xD6, 0x3E, 0xD3, 0x14};     // b main+0x3C46DD0
+constexpr std::array<u8, 48> TEX_GAP_ROUTINE{
+    0x68, 0x01, 0x08, 0x36, 0x29, 0xE0, 0x3B, 0xD5, 0xCA, 0x92, 0x00, 0x90,
+    0x48, 0xD1, 0x47, 0xF9, 0x28, 0x01, 0x08, 0xCB, 0x0B, 0x00, 0x9F, 0x52,
+    0x8B, 0x24, 0xA0, 0x72, 0x1F, 0x01, 0x0B, 0xEB, 0x63, 0x00, 0x00, 0x54,
+    0x49, 0xD1, 0x07, 0xF9, 0x21, 0xC1, 0x2C, 0x17, 0x23, 0xC1, 0x2C, 0x17,
+};
+constexpr std::array TEX_GAP_RECORDS{
+    BuiltinPatchRecord{0x777278, TEX_GAP_HOOK, TEX_GAP_ORIGINAL},
+    BuiltinPatchRecord{0x3C46DD0, TEX_GAP_ROUTINE, {}, true},
+};
+// Clear of the FPS Unlock state (0x4E9EE00..0x4E9EF10) and of the cheats' flags at 0x4E9FF80.
+constexpr std::array TEX_GAP_STATES{BuiltinPatchState{0x4E9EFA0, 0x8}};
+
 constexpr std::array BUILTIN_PATCHES{
     // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
     // instead of following the GPU-time controller down to its 480p floor.
@@ -478,6 +517,15 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = RENDER_ULTRA_RECORDS,
         .dlss_quality = Settings::NvidiaDlssQuality::UltraPerformance,
+    },
+    BuiltinPatch{
+        .name = "Texture heap tidy-up once a second (lichii-arc)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = TEX_GAP_RECORDS,
+        .states = TEX_GAP_STATES,
+        .enable_env = "LICHII_OOT_TEX_GAP",
     },
 };
 
@@ -970,6 +1018,9 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
     std::vector<std::string_view> applied;
     for (const auto& patch : BUILTIN_PATCHES) {
         if (patch.title_id != title_id || patch.module != name) {
+            continue;
+        }
+        if (!BuiltinPatchEnvEnabled(patch)) {
             continue;
         }
         if (std::find(disabled.cbegin(), disabled.cend(), patch.name) != disabled.cend()) {
@@ -1672,7 +1723,7 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
     }
 
     for (const auto& patch : BUILTIN_PATCHES) {
-        if (patch.title_id != title_id || patch.dlss_quality) {
+        if (patch.title_id != title_id || patch.dlss_quality || !BuiltinPatchEnvEnabled(patch)) {
             continue;
         }
         const auto is_disabled = [&](std::string_view name) {

@@ -15,3 +15,7 @@ En el log buscá `LICHII_COMPUTE_SKIP`, `compute dispatches skipped` y `Bounded 
 - `LICHII_STAGING_PREWARM=1` (ya en mark-arc) y `LICHII_MEM_PREWARM=0` (libera 1,7 GB de commit).
 
 **En la Claw se usan nombres fijos**: `lichii-prueba.exe` y `PRUEBA.bat` (cada prueba pisa la anterior; `lichii-prueba.version` dice de qué release es el exe y el bat baja el nuevo si no coincide). En el release los archivos siguen con fecha.
+
+**Corrida de la tarde (12:47)**
+- `LICHII_OOT_TEX_GAP=1` — parche del juego (built-in, solo OoT 1.1.1 build `E0F3CC…`), código de Fritchii 6.2 ([0c69e3ad74](https://github.com/Frizti/fritchii/commit/0c69e3ad74) + [cf8802206d](https://github.com/Frizti/fritchii/commit/cf8802206d), basado en Longshot PR #1478): el pedido de compactación del heap de texturas del juego (main+0x777278) pasa por un stub que deja empezar como mucho una ronda por segundo. Cada textura que el juego mueve, el emulador la recrea (imagen + subida + descriptores). Sin la variable el parche no se aplica ni aparece en Add-Ons. Log: `Applying built-in patch "Texture heap tidy-up once a second (lichii-arc)"`; si dice `Skipping` con un motivo, no se aplicó.
+- El bat sube `PRUEBA_VERSION` a `prueba-20261119-tarde` para que baje el exe nuevo aunque ya tengas el de la mañana.

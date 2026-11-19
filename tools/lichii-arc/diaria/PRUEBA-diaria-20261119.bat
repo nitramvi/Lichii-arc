@@ -25,6 +25,13 @@ REM   4) LICHII_STAGING_PREWARM=1: crea de antemano los bufferes de carga que us
 REM      la sesion anterior (congelon al entrar al bosque). Jugalo DOS veces.
 REM   5) LICHII_MEM_PREWARM=0: apaga la reserva de 1,7 GB de memoria del bat
 REM      principal, que no achicaba los congelones y le quitaba commit a las texturas.
+REM   6) (corrida de la tarde) LICHII_OOT_TEX_GAP=1: parche del juego (idea y
+REM      codigo de Fritchii 6.2). OoT reordena su "heap" de texturas en rondas y
+REM      pide una ronda nueva en CADA frame; cada textura que mueve el emulador la
+REM      tiene que crear de nuevo (imagen, subida, descriptores) = saltos y cache
+REM      de texturas llena. Ahora pide como mucho una ronda por segundo. En el log
+REM      tiene que aparecer: Applying built-in patch "Texture heap tidy-up once a
+REM      second (lichii-arc)". Riesgo: si ves texturas raras o un cuelgue, ponelo en 0.
 REM
 REM  Como probar: borra (o renombra) la cache de shaders de OoT para forzar
 REM  compilacion, entra al Bosque Kokiri y mira la escena de la telarana.
@@ -39,7 +46,7 @@ REM  en lugar de lichii-menu3.exe. Va en la misma carpeta que esos archivos.
 REM ==========================================================================
 cd /d "%~dp0"
 set "PRUEBA_EXE=lichii-prueba.exe"
-set "PRUEBA_VERSION=prueba-20261119"
+set "PRUEBA_VERSION=prueba-20261119-tarde"
 set "PRUEBA_BASE=%~dp0OoT-Lichii-Arc.bat"
 REM Siempre los mismos nombres (lichii-prueba.exe y PRUEBA.bat): cada prueba nueva pisa la anterior.
 REM lichii-prueba.version dice de que release es el exe; si no coincide con este bat, baja el nuevo.
@@ -73,6 +80,7 @@ set "LICHII_DRAW_HISTORY_GUARD=1"
 set "LICHII_TC_THRASH_GUARD=1"
 set "LICHII_STAGING_PREWARM=1"
 set "LICHII_MEM_PREWARM=0"
+set "LICHII_OOT_TEX_GAP=1"
 
 REM --- 3) Lanzar con los mismos argumentos que el bat principal ---
 set "PRUEBA_LANZAR="
