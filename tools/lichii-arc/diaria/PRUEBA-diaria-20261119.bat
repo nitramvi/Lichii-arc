@@ -30,9 +30,13 @@ REM ==========================================================================
 cd /d "%~dp0"
 set "PRUEBA_EXE=lichii-diaria-20261119.exe"
 set "PRUEBA_BASE=%~dp0OoT-Lichii-Arc.bat"
+REM Si falta el exe de prueba, lo baja solo del release (curl viene con Windows 10/11).
 if not exist "%~dp0%PRUEBA_EXE%" (
-  echo No encuentro %PRUEBA_EXE% en %~dp0
-  echo Bajalo del release diaria-20261119 y copialo a esta carpeta.
+  echo Bajando %PRUEBA_EXE% del release diaria-20261119...
+  curl.exe -L --fail -o "%~dp0%PRUEBA_EXE%" "https://github.com/nitramvi/Lichii-arc/releases/download/prueba-20261119/lichii-diaria-20261119.exe"
+)
+if not exist "%~dp0%PRUEBA_EXE%" (
+  echo No pude bajar %PRUEBA_EXE%. Bajalo a mano del release diaria-20261119 y copialo a %~dp0
   pause
   exit /b 1
 )
