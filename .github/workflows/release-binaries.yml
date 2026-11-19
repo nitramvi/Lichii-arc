@@ -26,6 +26,8 @@ on:
       - invent-x
       - invent-efhx
       - invent-b
+      # lichii-arc: one test branch per day, diaria-AAAAMMDD
+      - 'diaria-*'
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"
@@ -797,4 +799,54 @@ jobs:
           if [ "$published_tag" != "$expected" ] || [[ "$published_title" != *" build ${GITHUB_RUN_NUMBER} ("* ]]; then
             echo "Release is tagged '$published_tag' and titled '$published_title', expected tag $expected and a title naming build ${GITHUB_RUN_NUMBER}"
             exit 1
+          fi
+
+      # lichii-arc: a diaria-AAAAMMDD branch also gets a "diaria-AAAAMMDD" pre-release (tag
+      # prueba-AAAAMMDD, so the tag never shares the branch's name) holding the Windows exe as
+      # lichii-diaria-AAAAMMDD.exe and tools/lichii-arc/diaria/PRUEBA-diaria-AAAAMMDD.bat. A later
+      # push the same day moves the tag and replaces both files.
+      - name: Publish daily test release
+        if: startsWith(github.ref_name, 'diaria-')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          label="${GITHUB_REF_NAME#diaria-}"
+          tag="prueba-${label}"
+          exe=$(find artifacts -path '*windows-x86_64-pgo*' -name lichii.exe | head -1)
+          if [ -z "$exe" ]; then
+            exe=$(find artifacts -name lichii.exe | head -1)
+          fi
+          if [ -z "$exe" ]; then
+            zip_file=$(find dist artifacts -name '*windows*.zip' | head -1)
+            mkdir unpacked && unzip -q "$zip_file" -d unpacked
+            exe=$(find unpacked -name lichii.exe | head -1)
+          fi
+          test -n "$exe"
+          mkdir daily
+          cp "$exe" "daily/lichii-diaria-${label}.exe"
+          bat="tools/lichii-arc/diaria/PRUEBA-diaria-${label}.bat"
+          notes="tools/lichii-arc/diaria/NOTAS-diaria-${label}.md"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/${bat}?ref=${GITHUB_SHA}" \
+            -H "Accept: application/vnd.github.raw" > "daily/PRUEBA-diaria-${label}.bat"
+          if gh api "repos/${GITHUB_REPOSITORY}/contents/${notes}?ref=${GITHUB_SHA}" \
+              -H "Accept: application/vnd.github.raw" > daily-notes.md 2>/dev/null; then :; else
+            echo "Prueba diaria ${label}" > daily-notes.md
+          fi
+          printf '\n\nCommit: %s (build %s)\n' "${GITHUB_SHA}" "build-${GITHUB_RUN_NUMBER}" >> daily-notes.md
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" > /dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" \
+              -f "sha=${GITHUB_SHA}" -F force=true > /dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${tag}" -f "sha=${GITHUB_SHA}" > /dev/null
+          fi
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release upload "${tag}" daily/* --repo "${GITHUB_REPOSITORY}" --clobber
+            gh release edit "${tag}" --repo "${GITHUB_REPOSITORY}" --notes-file daily-notes.md \
+              --title "diaria-${label}" --prerelease
+          else
+            gh release create "${tag}" daily/* --repo "${GITHUB_REPOSITORY}" --verify-tag \
+              --prerelease --title "diaria-${label}" --notes-file daily-notes.md
           fi
