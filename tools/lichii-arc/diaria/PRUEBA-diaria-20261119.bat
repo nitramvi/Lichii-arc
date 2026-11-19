@@ -34,19 +34,24 @@ REM  y "Staging prewarm". Para un A/B, pone en 0 una de las dos
 REM  variables de abajo.
 REM
 REM  Este bat NO modifica OoT-Lichii-Arc.bat: copia sus lineas "set" (la misma
-REM  configuracion), suma las variables nuevas y lanza lichii-diaria-20261119.exe
+REM  configuracion), suma las variables nuevas y lanza lichii-prueba.exe
 REM  en lugar de lichii-menu3.exe. Va en la misma carpeta que esos archivos.
 REM ==========================================================================
 cd /d "%~dp0"
-set "PRUEBA_EXE=lichii-diaria-20261119.exe"
+set "PRUEBA_EXE=lichii-prueba.exe"
+set "PRUEBA_VERSION=prueba-20261119"
 set "PRUEBA_BASE=%~dp0OoT-Lichii-Arc.bat"
-REM Si falta el exe de prueba, lo baja solo del release (curl viene con Windows 10/11).
-if not exist "%~dp0%PRUEBA_EXE%" (
-  echo Bajando %PRUEBA_EXE% del release diaria-20261119...
-  curl.exe -L --fail -o "%~dp0%PRUEBA_EXE%" "https://github.com/nitramvi/Lichii-arc/releases/download/prueba-20261119/lichii-diaria-20261119.exe"
+REM Siempre los mismos nombres (lichii-prueba.exe y PRUEBA.bat): cada prueba nueva pisa la anterior.
+REM lichii-prueba.version dice de que release es el exe; si no coincide con este bat, baja el nuevo.
+set "PRUEBA_TIENE="
+if exist "%~dp0lichii-prueba.version" set /p PRUEBA_TIENE=<"%~dp0lichii-prueba.version"
+if not exist "%~dp0%PRUEBA_EXE%" set "PRUEBA_TIENE="
+if not "%PRUEBA_TIENE%"=="%PRUEBA_VERSION%" (
+  echo Bajando el exe de prueba del release %PRUEBA_VERSION%...
+  curl.exe -L --fail -o "%~dp0%PRUEBA_EXE%.tmp" "https://github.com/nitramvi/Lichii-arc/releases/download/prueba-20261119/lichii-diaria-20261119.exe" && move /y "%~dp0%PRUEBA_EXE%.tmp" "%~dp0%PRUEBA_EXE%" >nul && (echo %PRUEBA_VERSION%)>"%~dp0lichii-prueba.version"
 )
 if not exist "%~dp0%PRUEBA_EXE%" (
-  echo No pude bajar %PRUEBA_EXE%. Bajalo a mano del release diaria-20261119 y copialo a %~dp0
+  echo No pude bajar el exe de prueba. Bajalo a mano del release %PRUEBA_VERSION%, renombralo a %PRUEBA_EXE% y copialo a %~dp0
   pause
   exit /b 1
 )

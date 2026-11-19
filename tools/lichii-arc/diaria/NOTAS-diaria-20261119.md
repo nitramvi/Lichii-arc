@@ -13,3 +13,5 @@ En el log buscá `LICHII_COMPUTE_SKIP`, `compute dispatches skipped` y `Bounded 
 **Corrida 12:47 (pedido de Pedro: mirar otros repos y recomps)**
 - `LICHII_TC_THRASH_GUARD=1` — idea de Fritchii (Frizti, `7994ea8760`, FRITCHII_TC_THRASH_GUARD) rehecha para nuestro recolector: el log de la Claw muestra el commit de Windows en 1,6–2,5 GB libres, lo que baja el umbral crítico de texturas; el recolector borra 40 imágenes por frame sin uso hace 10 frames y al girar la cámara se vuelven a crear (frames de 130–480 ms). Ahora se recuerdan las borradas y, si vuelven rápido, el recolector respeta una edad mínima (hasta 600 frames). `=2` solo cuenta. Log: `LICHII_TC_THRASH_GUARD=` cada 600 frames.
 - `LICHII_STAGING_PREWARM=1` (ya en mark-arc) y `LICHII_MEM_PREWARM=0` (libera 1,7 GB de commit).
+
+**En la Claw se usan nombres fijos**: `lichii-prueba.exe` y `PRUEBA.bat` (cada prueba pisa la anterior; `lichii-prueba.version` dice de qué release es el exe y el bat baja el nuevo si no coincide). En el release los archivos siguen con fecha.
