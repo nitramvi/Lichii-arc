@@ -4,6 +4,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <fstream>
 #include <cstdlib>
 #include <initializer_list>
 #include <utility>
@@ -15,6 +18,7 @@
 #include "common/assert.h"
 #include "common/bit_util.h"
 #include "common/common_types.h"
+#include "common/fs/path_util.h"
 #include "common/literals.h"
 #include "common/logging.h"
 #include "video_core/nx2_stutter_trace.h"
@@ -86,6 +90,47 @@ size_t GetStreamBufferSize(const Device& device) {
     }
     return (std::min)(Common::AlignUp(size, MAX_ALIGNMENT), MAX_STREAM_BUFFER_SIZE);
 }
+
+// lichii-arc: LICHII_STAGING_PREWARM=1. Entering a new area in OoT (Kokiri Forest) made 69 staging
+// buffers in one frame on the Arc 140V, 726 ms of a 1.7 s freeze (one took 254 ms); holding the
+// memory ahead of time (LICHII_MEM_PREWARM) did not shorten it, so the buffers themselves are made
+// ahead: each level's peak is saved per session and the next one makes that many while the menu
+// runs (a few per frame) and keeps them idle. LICHII_STAGING_PREWARM_MB caps it (768 default).
+bool StagingPrewarmWanted() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("LICHII_STAGING_PREWARM");
+        return value && value[0] == '1';
+    }();
+    return wanted;
+}
+
+u64 StagingPrewarmBudget() {
+    static const u64 budget = [] {
+        const char* value = std::getenv("LICHII_STAGING_PREWARM_MB");
+        u64 mb = 768;
+        if (value && value[0] != '\0') {
+            mb = std::strtoull(value, nullptr, 10);
+        }
+        return (std::min<u64>)(mb, 4096) << 20;
+    }();
+    return budget;
+}
+
+std::filesystem::path StagingPrewarmFile() {
+    const auto dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir);
+    return dir / "lichii_staging_prewarm.txt";
+}
+
+MemoryUsage UsageOfCacheIndex(u32 index) {
+    switch (index) {
+    case 0:
+        return MemoryUsage::DeviceLocal;
+    case 2:
+        return MemoryUsage::Download;
+    default:
+        return MemoryUsage::Upload;
+    }
+}
 } // Anonymous namespace
 
 StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& memory_allocator_,
@@ -122,9 +167,16 @@ StagingBufferPool::StagingBufferPool(const Device& device_, MemoryAllocator& mem
     }
     stream_pointer = stream_buffer.Mapped();
     ASSERT_MSG(!stream_pointer.empty(), "Stream buffer must be host visible!");
+    if (StagingPrewarmWanted()) {
+        LoadStagingPrewarm();
+    }
 }
 
-StagingBufferPool::~StagingBufferPool() = default;
+StagingBufferPool::~StagingBufferPool() {
+    if (StagingPrewarmWanted()) {
+        SaveStagingPrewarm();
+    }
+}
 
 StagingBufferRef StagingBufferPool::Request(size_t size, MemoryUsage usage, bool deferred) {
     if (!deferred && usage == MemoryUsage::Upload && size <= region_size) {
@@ -143,6 +195,13 @@ void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     current_delete_level = (current_delete_level + 1) % NUM_LEVELS;
+    if (StagingPrewarmWanted()) {
+        StepStagingPrewarm();
+        // Saved every ~20 s too: the emulator is often closed by killing it.
+        if (++staging_frames % 1200 == 0 && staging_peak_dirty) {
+            SaveStagingPrewarm();
+        }
+    }
 
     ReleaseCache(MemoryUsage::DeviceLocal);
     ReleaseCache(MemoryUsage::Upload);
@@ -323,7 +382,129 @@ StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage
     } else {
         cache_level.entries.push_back(std::move(entry));
     }
+    if (StagingPrewarmWanted()) {
+        NoteStagingPeak(usage, log2_size);
+    }
     return ref;
+}
+
+size_t StagingBufferPool::CacheIndex(const StagingBuffersCache& cache) const noexcept {
+    if (&cache == &device_local_cache) {
+        return 0;
+    }
+    if (&cache == &download_cache) {
+        return 2;
+    }
+    return 1;
+}
+
+void StagingBufferPool::NoteStagingPeak(MemoryUsage usage, u32 log2) {
+    StagingBuffersCache& cache = GetCache(usage);
+    if (log2 >= staging_peak[0].size()) {
+        return;
+    }
+    const StagingBuffers& level = cache[log2];
+    const u32 count = static_cast<u32>(level.entries.size() + level.deferred.size());
+    u32& peak = staging_peak[CacheIndex(cache)][log2];
+    if (count > peak) {
+        peak = count;
+        staging_peak_dirty = true;
+    }
+}
+
+void StagingBufferPool::SaveStagingPrewarm() {
+    // The file keeps the larger of this session's peak and the last one's, so a session that
+    // stayed in the menu doesn't forget the forest.
+    std::ofstream file(StagingPrewarmFile(), std::ios::trunc);
+    if (!file) {
+        return;
+    }
+    for (u32 cache = 0; cache < 3; ++cache) {
+        for (u32 level = 0; level < staging_peak[cache].size(); ++level) {
+            const u32 count = (std::max)(staging_peak[cache][level], staging_floor[cache][level]);
+            if (count != 0) {
+                file << cache << ' ' << level << ' ' << count << '\n';
+            }
+        }
+    }
+    staging_peak_dirty = false;
+}
+
+void StagingBufferPool::LoadStagingPrewarm() {
+    std::ifstream file(StagingPrewarmFile());
+    if (!file) {
+        LOG_INFO(Render_Vulkan, "Staging prewarm: no sizes from an earlier session yet");
+        return;
+    }
+    std::vector<std::pair<u32, u32>> wanted;
+    u32 cache{};
+    u32 level{};
+    u32 count{};
+    while (file >> cache >> level >> count) {
+        // 16 KiB to 256 MiB; the small ones come from the stream buffer.
+        if (cache >= 3 || level < 14 || level > 28) {
+            continue;
+        }
+        staging_floor[cache][level] = (std::min<u32>)(count, 64);
+    }
+    // Largest first: those took longest to make (one 254 ms).
+    for (u32 lvl = 28; lvl >= 14; --lvl) {
+        for (u32 c = 0; c < 3; ++c) {
+            for (u32 i = 0; i < staging_floor[c][lvl]; ++i) {
+                wanted.emplace_back(c, lvl);
+            }
+        }
+    }
+    u64 bytes = 0;
+    const u64 budget = StagingPrewarmBudget();
+    for (const auto& [c, lvl] : wanted) {
+        if (bytes + (u64{1} << lvl) > budget) {
+            // Keep no more idle than it will make.
+            staging_floor[c][lvl] = (std::min)(staging_floor[c][lvl],
+                                               static_cast<u32>(std::ranges::count(
+                                                   staging_todo, std::pair<u32, u32>{c, lvl})));
+            continue;
+        }
+        bytes += u64{1} << lvl;
+        staging_todo.emplace_back(c, lvl);
+    }
+    // Made from the back.
+    std::ranges::reverse(staging_todo);
+    LOG_INFO(Render_Vulkan, "Staging prewarm: {} buffers, {} MiB to make ahead of time",
+             staging_todo.size(), bytes >> 20);
+}
+
+void StagingBufferPool::StepStagingPrewarm() {
+    if (staging_todo.empty()) {
+        return;
+    }
+    // Up to ~4 ms of each frame.
+    const auto begin = std::chrono::steady_clock::now();
+    while (!staging_todo.empty() &&
+           std::chrono::steady_clock::now() - begin < std::chrono::milliseconds{4}) {
+        const auto [c, lvl] = staging_todo.back();
+        staging_todo.pop_back();
+        const MemoryUsage usage = UsageOfCacheIndex(c);
+        StagingBuffers& level = GetCache(usage)[lvl];
+        if (level.entries.size() + level.deferred.size() >= staging_floor[c][lvl]) {
+            continue;
+        }
+        const StagingBufferRef ref = CreateStagingBuffer(size_t{1} << lvl, usage, false);
+        if (ref.buffer == *stream_buffer) {
+            // No memory for it: stop making them.
+            staging_todo.clear();
+            break;
+        }
+        // Touch the pages: the first write to a fresh allocation cost as much as making it.
+        if (!ref.mapped_span.empty()) {
+            std::memset(ref.mapped_span.data(), 0, ref.mapped_span.size());
+        }
+        // Idle from the start.
+        level.entries.back().tick = 0;
+    }
+    if (staging_todo.empty()) {
+        LOG_INFO(Render_Vulkan, "Staging prewarm: done");
+    }
 }
 
 StagingBufferPool::StagingBuffersCache& StagingBufferPool::GetCache(MemoryUsage usage) {
@@ -394,8 +575,14 @@ void StagingBufferPool::ReleaseLevel(StagingBuffersCache& cache, size_t log2) {
         return value && value[0] == '1';
     }();
     const size_t KeepMaxLog2 = tex_stream ? 26 : 25;
-    const size_t KeepPerLevel = tex_stream ? 4 : 2;
-    if (&cache == &upload_cache && log2 <= KeepMaxLog2) {
+    size_t KeepPerLevel = tex_stream ? 4 : 2;
+    const u32 floor = StagingPrewarmWanted() && log2 < staging_floor[0].size()
+                          ? staging_floor[CacheIndex(cache)][log2]
+                          : 0;
+    if (floor != 0) {
+        KeepPerLevel = (std::max<size_t>)(KeepPerLevel, floor);
+    }
+    if ((&cache == &upload_cache && log2 <= KeepMaxLog2) || floor != 0) {
         size_t idle = 0;
         std::erase_if(entries, [this, &idle, KeepPerLevel](const StagingBuffer& entry) {
             return scheduler.IsFree(entry.tick) && ++idle > KeepPerLevel;

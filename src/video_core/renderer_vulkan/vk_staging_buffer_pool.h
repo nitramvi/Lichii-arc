@@ -113,6 +113,23 @@ private:
     void ReleaseIdleBuffers();
 
     void ReleaseLevel(StagingBuffersCache& cache, size_t log2);
+
+    /// lichii-arc: LICHII_STAGING_PREWARM. Index of a cache (0 device local, 1 upload,
+    /// 2 download).
+    size_t CacheIndex(const StagingBuffersCache& cache) const noexcept;
+    void NoteStagingPeak(MemoryUsage usage, u32 log2);
+    void LoadStagingPrewarm();
+    void SaveStagingPrewarm();
+    void StepStagingPrewarm();
+
+    /// Most buffers each level held at once this session, and the idle ones each level keeps
+    /// (what the last session peaked at, made ahead of time).
+    std::array<std::array<u32, 64>, 3> staging_peak{};
+    std::array<std::array<u32, 64>, 3> staging_floor{};
+    /// Buffers still to make ahead of time: cache, level.
+    std::vector<std::pair<u32, u32>> staging_todo;
+    bool staging_peak_dirty = false;
+    u64 staging_frames = 0;
     size_t Region(size_t iter) const noexcept {
         return iter / region_size;
     }
