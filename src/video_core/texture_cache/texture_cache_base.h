@@ -529,6 +529,30 @@ private:
     /// Runs the Garbage Collector.
     void RunGarbageCollector(bool out_of_memory);
 
+    /// lichii-arc: LICHII_TC_THRASH_GUARD (1 = guard, 2 = count only, off by default). See
+    /// TickThrashGuard.
+    void NoteThrashDelete(const ImageBase& image, bool pressured);
+    void NoteThrashMade(const ImageBase& image);
+    void TickThrashGuard();
+    struct ThrashGhost {
+        GPUVAddr gpu_addr{}; ///< 0 = empty
+        u64 shape{};
+        u64 last_use{};
+        bool pressured{};
+    };
+    static constexpr size_t ThrashGhostSlots = 8192;
+    static constexpr size_t ThrashBuckets = 8; ///< gaps up to 4, 8, ... 512 frames
+    static constexpr u64 ThrashMaxFloor = 600;
+    std::vector<ThrashGhost> thrash_ghosts;
+    std::array<u32, ThrashBuckets> thrash_window{};
+    u64 thrash_floor = 0;
+    u64 thrash_calm_frames = 0;
+    u64 thrash_made = 0;
+    u64 thrash_remade = 0;
+    u64 thrash_remade_pressured = 0;
+    u64 thrash_gap_sum = 0;
+    u32 thrash_raised = 0;
+
     /// Find or create an image view in the guest descriptor table
     ImageViewId VisitImageView(u32 index, bool compute);
 

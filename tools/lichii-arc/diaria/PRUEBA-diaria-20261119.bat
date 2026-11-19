@@ -16,11 +16,21 @@ REM      saltear si el test de profundidad esta realmente prendido y todos los
 REM      render targets donde pinta ya existian en un frame anterior. Evita que
 REM      se pierda para siempre un dibujo que "hornea" una textura una sola vez
 REM      (posible causa de manchas/basura tras un corte de camara).
+REM   3) (corrida 12:47) LICHII_TC_THRASH_GUARD=1: idea de Fritchii rehecha para
+REM      nuestro codigo. En el bosque la memoria libre de Windows (commit) baja a
+REM      ~2 GB y el emulador borra 40 texturas por frame que no se usaron hace
+REM      solo 10 frames; al girar la camara las vuelve a crear = saltos. Ahora
+REM      recuerda las borradas y, si el juego las vuelve a pedir, las deja vivir mas.
+REM   4) LICHII_STAGING_PREWARM=1: crea de antemano los bufferes de carga que uso
+REM      la sesion anterior (congelon al entrar al bosque). Jugalo DOS veces.
+REM   5) LICHII_MEM_PREWARM=0: apaga la reserva de 1,7 GB de memoria del bat
+REM      principal, que no achicaba los congelones y le quitaba commit a las texturas.
 REM
 REM  Como probar: borra (o renombra) la cache de shaders de OoT para forzar
 REM  compilacion, entra al Bosque Kokiri y mira la escena de la telarana.
 REM  En el log (user\log) busca "LICHII_COMPUTE_SKIP", "compute dispatches
-REM  skipped" y "Bounded pipeline wait". Para un A/B, pone en 0 una de las dos
+REM  skipped", "Bounded pipeline wait", "LICHII_TC_THRASH_GUARD" (cada 20 s)
+REM  y "Staging prewarm". Para un A/B, pone en 0 una de las dos
 REM  variables de abajo.
 REM
 REM  Este bat NO modifica OoT-Lichii-Arc.bat: copia sus lineas "set" (la misma
@@ -55,6 +65,9 @@ for /f "usebackq tokens=* delims=" %%L in (`findstr /r /i /c:"^[ 	]*set[ 	][ 	]*
 REM --- 2) Variables nuevas de esta prueba (1 = prendida, 0 = apagada) ---
 set "LICHII_COMPUTE_SKIP=1"
 set "LICHII_DRAW_HISTORY_GUARD=1"
+set "LICHII_TC_THRASH_GUARD=1"
+set "LICHII_STAGING_PREWARM=1"
+set "LICHII_MEM_PREWARM=0"
 
 REM --- 3) Lanzar con los mismos argumentos que el bat principal ---
 set "PRUEBA_LANZAR="

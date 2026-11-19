@@ -149,6 +149,144 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
     }
 }
 
+namespace LichiiThrash {
+/// LICHII_TC_THRASH_GUARD: 0 off (default), 1 guard, 2 count and log only.
+[[nodiscard]] inline int LichiiThrashGuardMode() {
+    static const int mode = [] {
+        const char* value = std::getenv("LICHII_TC_THRASH_GUARD");
+        return value != nullptr ? std::atoi(value) : 0;
+    }();
+    return mode;
+}
+
+[[nodiscard]] inline u64 LichiiThrashShape(const ImageInfo& info) {
+    return (u64{info.size.width} << 40) ^ (u64{info.size.height} << 20) ^ u64{info.size.depth} ^
+           (u64{static_cast<u32>(info.format)} << 56) ^ (u64{info.resources.layers} << 8) ^
+           (u64{info.resources.levels} << 32);
+}
+
+[[nodiscard]] inline size_t LichiiThrashSlot(GPUVAddr gpu_addr, u64 shape, size_t slots) {
+    return static_cast<size_t>(((gpu_addr >> 8) ^ shape ^ (shape >> 29)) * 0x9E3779B97F4A7C15ULL >>
+                               40) % slots;
+}
+} // namespace LichiiThrash
+
+template <class P>
+void TextureCache<P>::NoteThrashDelete(const ImageBase& image, bool pressured) {
+    if (LichiiThrash::LichiiThrashGuardMode() <= 0) {
+        return;
+    }
+    if (thrash_ghosts.empty()) {
+        thrash_ghosts.resize(ThrashGhostSlots);
+    }
+    const u64 shape = LichiiThrash::LichiiThrashShape(image.info);
+    const u64 last_use =
+        image.lru_index != SIZE_MAX ? static_cast<u64>(lru_cache.Tick(image.lru_index)) : frame_tick;
+    thrash_ghosts[LichiiThrash::LichiiThrashSlot(image.gpu_addr, shape, ThrashGhostSlots)] = ThrashGhost{
+        .gpu_addr = image.gpu_addr,
+        .shape = shape,
+        .last_use = last_use,
+        .pressured = pressured,
+    };
+}
+
+template <class P>
+void TextureCache<P>::NoteThrashMade(const ImageBase& image) {
+    if (LichiiThrash::LichiiThrashGuardMode() <= 0) {
+        return;
+    }
+    ++thrash_made;
+    if (thrash_ghosts.empty()) {
+        return;
+    }
+    const u64 shape = LichiiThrash::LichiiThrashShape(image.info);
+    ThrashGhost& ghost = thrash_ghosts[LichiiThrash::LichiiThrashSlot(image.gpu_addr, shape, ThrashGhostSlots)];
+    if (ghost.gpu_addr != image.gpu_addr || ghost.shape != shape) {
+        return;
+    }
+    const u64 gap = frame_tick - (std::min)(frame_tick, ghost.last_use);
+    const bool pressured = ghost.pressured;
+    ghost = ThrashGhost{};
+    // Back after a minute or more is a scene coming back, not a loop.
+    if (gap > 1800) {
+        return;
+    }
+    ++thrash_remade;
+    thrash_gap_sum += gap;
+    if (pressured && gap <= ThrashMaxFloor) {
+        ++thrash_remade_pressured;
+        size_t bucket = 0;
+        while (bucket + 1 < ThrashBuckets && gap > (u64{4} << bucket)) {
+            ++bucket;
+        }
+        ++thrash_window[bucket];
+    }
+}
+
+// lichii-arc: LICHII_TC_THRASH_GUARD=1, the idea of Fritchii's FRITCHII_TC_THRASH_GUARD (Frizti,
+// 7994ea8760) rebuilt for this collector. On the Claw 8 AI+ the thresholds are bounded by the
+// host's commit (1.6-2.5 GB left in Kokiri Forest), the usage sits past them, and the collector
+// deletes 40 images a frame unused for just 10 frames: turning the camera brings them back, each
+// a new image, its memory and an upload (130-480 ms frames). Deleted images are remembered by
+// address and shape; while 8+ of those the collector took under pressure come back within a
+// second, images used within 1.25x the 90th percentile of those gaps (at most 600 frames) are
+// left alone. An image that could not be made at all still gets the plain collection.
+template <class P>
+void TextureCache<P>::TickThrashGuard() {
+    const int mode = LichiiThrash::LichiiThrashGuardMode();
+    if (mode <= 0) {
+        return;
+    }
+    constexpr u64 CheckFrames = 60;
+    constexpr u32 MinRemakes = 8;
+    if (frame_tick % CheckFrames == 0) {
+        const bool pressure = total_used_memory >= expected_memory;
+        thrash_calm_frames = pressure ? 0 : thrash_calm_frames + CheckFrames;
+        const u32 remakes = std::accumulate(thrash_window.begin(), thrash_window.end(), u32{0});
+        u64 wanted = 0;
+        if (remakes >= MinRemakes) {
+            u32 seen = 0;
+            for (size_t bucket = 0; bucket < ThrashBuckets; ++bucket) {
+                seen += thrash_window[bucket];
+                if (seen * 10 >= remakes * 9) {
+                    const u64 gap = u64{4} << bucket;
+                    wanted = (std::min)(gap + gap / 4 + 2, ThrashMaxFloor);
+                    break;
+                }
+            }
+        }
+        thrash_window = {};
+        if (mode == 1 && wanted > thrash_floor) {
+            thrash_floor = wanted;
+            ++thrash_raised;
+        } else if (mode != 1) {
+            thrash_floor = 0;
+        } else if (thrash_calm_frames >= 600 && thrash_floor != 0) {
+            thrash_floor -= thrash_floor / 8 + 1;
+        }
+    }
+    if (frame_tick % 600 != 0) {
+        return;
+    }
+    if (thrash_remade != 0 || thrash_floor != 0) {
+        LOG_INFO(HW_GPU,
+                 "LICHII_TC_THRASH_GUARD={} last 600 frames: {} images made, {} made again after a "
+                 "delete ({} after the collector under pressure, {:.1f} frames after their last "
+                 "use); collector age floor {} frames (raised {} times); used {} MiB, critical "
+                 "{} MiB",
+                 mode, thrash_made, thrash_remade, thrash_remade_pressured,
+                 thrash_remade != 0
+                     ? static_cast<double>(thrash_gap_sum) / static_cast<double>(thrash_remade)
+                     : 0.0,
+                 thrash_floor, thrash_raised, total_used_memory >> 20, critical_memory >> 20);
+    }
+    thrash_made = 0;
+    thrash_remade = 0;
+    thrash_remade_pressured = 0;
+    thrash_gap_sum = 0;
+    thrash_raised = 0;
+}
+
 template <class P>
 void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
     const StutterTrace::SiteScope site{StutterTrace::Site::TextureCollect};
@@ -172,6 +310,11 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         }();
         ticks_to_destroy =
             EvictionAge(mode_age, min_age, total_used_memory, retention_limit, out_of_memory);
+        // LICHII_TC_THRASH_GUARD: images the game keeps coming back to stay. An allocation that
+        // failed needs the memory now.
+        if (!out_of_memory) {
+            ticks_to_destroy = (std::max)(ticks_to_destroy, thrash_floor);
+        }
         num_iterations = aggressive_mode ? 40 : (high_priority_mode ? 20 : 10);
     };
     const auto CanEvict = [this, &high_priority_mode, &aggressive_mode, &evict_old_costly,
@@ -231,6 +374,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
         trace_delete_flags = static_cast<u32>(image.flags);
         trace_delete_downloaded = must_download;
+        NoteThrashDelete(image, aggressive_mode || high_priority_mode);
         UnregisterImage(image_id);
         trace_delete_reason = evict_bad_overlaps   ? "gc-bad-overlap"
                               : aggressive_mode    ? "gc-aggressive"
@@ -425,6 +569,7 @@ void TextureCache<P>::LogThresholds() const {
 
 template <class P>
 void TextureCache<P>::TickFrame() {
+    TickThrashGuard();
     // Upload buffers grown for one huge image (title 1's 341 MiB terrain layer pools) are freed
     // rather than kept for the rest of the session.
     for (auto* const scratch : {&swizzle_data_buffer, &unswizzle_data_buffer}) {
@@ -3368,6 +3513,7 @@ ImageId TextureCache<P>::InsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
         return image_id;
     }
     const Image& image = slot_images[image_id];
+    NoteThrashMade(image);
     if (tc_trace) {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tc_t0).count();
         LOG_WARNING(HW_GPU,
