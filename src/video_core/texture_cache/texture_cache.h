@@ -374,7 +374,11 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes : gc_deletes);
         trace_delete_flags = static_cast<u32>(image.flags);
         trace_delete_downloaded = must_download;
-        NoteThrashDelete(image, aggressive_mode || high_priority_mode);
+        // BadOverlap images are another image's bytes (Ocarina's shifting render targets): not a
+        // texture the collector took too early.
+        if (!evict_bad_overlaps) {
+            NoteThrashDelete(image, aggressive_mode || high_priority_mode);
+        }
         UnregisterImage(image_id);
         trace_delete_reason = evict_bad_overlaps   ? "gc-bad-overlap"
                               : aggressive_mode    ? "gc-aggressive"

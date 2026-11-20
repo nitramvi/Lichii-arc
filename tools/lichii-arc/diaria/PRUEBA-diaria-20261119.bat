@@ -46,7 +46,7 @@ REM  en lugar de lichii-menu3.exe. Va en la misma carpeta que esos archivos.
 REM ==========================================================================
 cd /d "%~dp0"
 set "PRUEBA_EXE=lichii-prueba.exe"
-set "PRUEBA_VERSION=prueba-20261119-tarde"
+set "PRUEBA_VERSION=prueba-20261119-noche"
 set "PRUEBA_BASE=%~dp0OoT-Lichii-Arc.bat"
 REM Siempre los mismos nombres (lichii-prueba.exe y PRUEBA.bat): cada prueba nueva pisa la anterior.
 REM lichii-prueba.version dice de que release es el exe; si no coincide con este bat, baja el nuevo.
