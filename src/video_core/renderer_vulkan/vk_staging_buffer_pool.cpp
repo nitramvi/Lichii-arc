@@ -447,9 +447,11 @@ void StagingBufferPool::LoadStagingPrewarm() {
         }
         staging_floor[cache][level] = (std::min<u32>)(count, 64);
     }
-    // Largest first: those took longest to make (one 254 ms).
-    for (u32 lvl = 28; lvl >= 14; --lvl) {
-        for (u32 c = 0; c < 3; ++c) {
+    // Upload buffers first (texture uploads on entering an area; the forest learned 1.36 GB in
+    // all, more than the budget), then download, then device local; within each, largest first:
+    // those took longest to make (one 254 ms).
+    for (const u32 c : {1U, 2U, 0U}) {
+        for (u32 lvl = 28; lvl >= 14; --lvl) {
             for (u32 i = 0; i < staging_floor[c][lvl]; ++i) {
                 wanted.emplace_back(c, lvl);
             }
