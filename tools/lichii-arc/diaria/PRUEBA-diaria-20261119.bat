@@ -81,6 +81,9 @@ set "LICHII_TC_THRASH_GUARD=1"
 set "LICHII_STAGING_PREWARM=1"
 set "LICHII_MEM_PREWARM=0"
 set "LICHII_OOT_TEX_GAP=1"
+REM 7) (noche) LICHII_ZERO_TRIM_CAP=1: la limpieza de memoria en ceros de Windows se hace en
+REM    pedazos de 1 MiB (upstream #2233, de Fritchii): una sola llamada larga frenaba al juego.
+set "LICHII_ZERO_TRIM_CAP=1"
 
 REM --- 3) Lanzar con los mismos argumentos que el bat principal ---
 set "PRUEBA_LANZAR="

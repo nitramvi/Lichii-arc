@@ -1239,9 +1239,18 @@ std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
             VirtualUnlock(reinterpret_cast<void*>(page), PageAlignment);
         }
     };
+    // lichii-arc: LICHII_ZERO_TRIM_CAP=1 unlocks runs of at most 1 MiB, as upstream #2233 (from
+    // Fritchii fcf026bfca): one VirtualUnlock over a long run took 30-46 ms and a guest
+    // VirtualProtect landing in it waited as long. Off by default.
+    static const size_t max_unlock_pages = [] {
+        const char* value = std::getenv("LICHII_ZERO_TRIM_CAP");
+        return value != nullptr && value[0] == '1' ? (size_t{1} << 20) / PageAlignment
+                                                   : ~size_t{0};
+    }();
     for (size_t i = 0; i < trim.size();) {
         size_t j = i + 1;
-        while (j < trim.size() && trim[j] == trim[j - 1] + PageAlignment) {
+        while (j < trim.size() && j - i < max_unlock_pages &&
+               trim[j] == trim[j - 1] + PageAlignment) {
             ++j;
         }
         unlock(trim[i], trim[j - 1] + PageAlignment);
