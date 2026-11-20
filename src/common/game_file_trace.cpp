@@ -3,6 +3,9 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <set>
+
+#include "common/logging.h"
 #include <memory>
 #include <mutex>
 
@@ -24,8 +27,41 @@ std::shared_ptr<const std::function<void(const std::string&)>> listener;
 } // Anonymous namespace
 
 bool Enabled() {
-    static const bool enabled = EnvOn("LICHII_ZONE_PREWARM") || EnvOn("LICHII_SHADER_PROVENANCE");
+    static const bool enabled = EnvOn("LICHII_ZONE_PREWARM") || EnvOn("LICHII_SHADER_PROVENANCE") ||
+                                EnvOn("LICHII_FILE_LOG");
     return enabled;
+}
+
+// lichii-arc: LICHII_FILE_LOG=1 logs the first time each game file whose path names a voice,
+// sound or language is read (up to 400), to see which voice language the game picked.
+static void LogLanguageFile(const std::string& path) {
+    static const bool on = EnvOn("LICHII_FILE_LOG");
+    if (!on) {
+        return;
+    }
+    std::string lower = path;
+    std::ranges::transform(lower, lower.begin(), [](unsigned char c) {
+        return static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+    });
+    static constexpr const char* Keys[] = {"voice", "vo_", "/vo/", "lang",  "sound", "audio", "message",
+                                           "msg",   "usen", "uses", "eues", "jpja",  "usfr"};
+    bool match = false;
+    for (const char* key : Keys) {
+        if (lower.find(key) != std::string::npos) {
+            match = true;
+            break;
+        }
+    }
+    if (!match) {
+        return;
+    }
+    static std::mutex log_mutex;
+    static std::set<std::string> seen;
+    std::scoped_lock lock{log_mutex};
+    if (seen.size() >= 400 || !seen.insert(path).second) {
+        return;
+    }
+    LOG_INFO(Service_FS, "LICHII_FILE_LOG {}", path);
 }
 
 void Note(std::string_view path) {
@@ -34,6 +70,7 @@ void Note(std::string_view path) {
     }
     std::shared_ptr<const std::function<void(const std::string&)>> current;
     std::string copy{path};
+    LogLanguageFile(copy);
     {
         std::scoped_lock lock{mutex};
         last_file = copy;

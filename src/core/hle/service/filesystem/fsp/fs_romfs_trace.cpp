@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
+#include <map>
+#include <string>
 
 #include "common/game_file_trace.h"
 #include "common/logging.h"
@@ -44,6 +47,24 @@ void RomfsReadTrace::Build(const FileSys::VirtualFile& storage) {
         };
     walk(root, "");
     std::ranges::sort(ranges, {}, &Range::begin);
+    // lichii-arc: LICHII_FILE_LOG=1 lists the folders (two levels) that hold the game's files, to
+    // see which voice languages the dump carries.
+    if (const char* value = std::getenv("LICHII_FILE_LOG"); value != nullptr && value[0] == '1') {
+        std::map<std::string, size_t> folders;
+        for (const auto& path : paths) {
+            const size_t first = path.find('/');
+            const size_t second =
+                first == std::string::npos ? std::string::npos : path.find('/', first + 1);
+            ++folders[second == std::string::npos ? path.substr(0, first) : path.substr(0, second)];
+        }
+        size_t logged = 0;
+        for (const auto& [folder, count] : folders) {
+            if (++logged > 800) {
+                break;
+            }
+            LOG_INFO(Service_FS, "LICHII_FILE_LOG folder {} ({} files)", folder, count);
+        }
+    }
     LOG_INFO(Service_FS, "lichii-arc game file trace: {} RomFS files mapped in a storage of {} bytes",
              paths.size(), storage->GetSize());
 }

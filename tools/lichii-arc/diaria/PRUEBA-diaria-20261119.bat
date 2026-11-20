@@ -46,7 +46,7 @@ REM  en lugar de lichii-menu3.exe. Va en la misma carpeta que esos archivos.
 REM ==========================================================================
 cd /d "%~dp0"
 set "PRUEBA_EXE=lichii-prueba.exe"
-set "PRUEBA_VERSION=prueba-20261119-noche"
+set "PRUEBA_VERSION=prueba-20261119-madrugada"
 set "PRUEBA_BASE=%~dp0OoT-Lichii-Arc.bat"
 REM Siempre los mismos nombres (lichii-prueba.exe y PRUEBA.bat): cada prueba nueva pisa la anterior.
 REM lichii-prueba.version dice de que release es el exe; si no coincide con este bat, baja el nuevo.
@@ -84,6 +84,9 @@ set "LICHII_OOT_TEX_GAP=1"
 REM 7) (noche) LICHII_ZERO_TRIM_CAP=1: la limpieza de memoria en ceros de Windows se hace en
 REM    pedazos de 1 MiB (upstream #2233, de Fritchii): una sola llamada larga frenaba al juego.
 set "LICHII_ZERO_TRIM_CAP=1"
+REM 8) (madrugada) LICHII_FILE_LOG=1: anota en el log las carpetas del juego y los archivos de
+REM    voces/sonido/idioma que lee, para ver por que salen voces en ingles. Solo diagnostico.
+set "LICHII_FILE_LOG=1"
 
 REM --- 3) Lanzar con los mismos argumentos que el bat principal ---
 set "PRUEBA_LANZAR="
