@@ -46,8 +46,9 @@ constexpr u64 DefaultAttributeTypes = 0x555555555555f555ULL;
 
 /// What the builder finds in the game files, recorded in the precache's count file. A file built by
 /// an older builder is built again at launch (WarmFilesStale). 2: Mario Kart World's .esetb
-/// effects. 3: .ptcl particle effects (Fire Emblem). 4: graphics programs (warm-graphics.bin).
-constexpr u32 WarmBuilderVersion = 4;
+/// effects. 3: .ptcl particle effects (Fire Emblem). 4: graphics programs (warm-graphics.bin,
+/// lichii-arc). 5: bare programs in the zstd frames of asset packs (Kirby Air Riders, upstream's 4).
+constexpr u32 WarmBuilderVersion = 5;
 
 /// lichii-arc: LICHII_WARM_TESS=1 adds the tessellated programs of the game files (each BNSH
 /// variation with a tessellation stage: its vertex, tessellation and fragment stages together) to

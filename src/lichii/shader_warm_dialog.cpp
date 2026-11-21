@@ -31,6 +31,15 @@ bool ShaderWarmFilesExist(u64 title_id) {
            std::filesystem::exists(ShaderWarm::GraphicsWarmPath(title_id), ec);
 }
 
+bool ShaderWarmRequested(u64 title_id) {
+    return title_id != 0 && ShaderWarm::WarmRequested(ShaderWarm::ComputeWarmPath(title_id));
+}
+
+bool SetShaderWarmRequested(u64 title_id, bool requested) {
+    return title_id != 0 &&
+           ShaderWarm::SetWarmRequested(ShaderWarm::ComputeWarmPath(title_id), requested);
+}
+
 bool DeleteShaderWarmFiles(u64 title_id, std::string& error) {
     return ShaderWarm::DeleteWarmFiles(title_id, &error);
 }
@@ -47,6 +56,9 @@ QString StageText(const std::string& stage) {
     }
     if (stage == "Converting") {
         return ShaderWarmDialog::tr("Converting shaders");
+    }
+    if (stage == "Reading asset packs (MiB)") {
+        return ShaderWarmDialog::tr("Reading asset packs (MiB)");
     }
     if (stage == "Writing") {
         return ShaderWarmDialog::tr("Writing the precache files");
@@ -195,7 +207,7 @@ void ShaderWarmDialog::OnFinished(const ShaderWarm::Result& result, bool stopped
         stage_label->setText(tr("Shader precache is ready."));
         const size_t graphics_programs = result.vertex_programs + result.fragment_programs;
         if (result.compute_programs == 0 && graphics_programs == 0) {
-            text = result.archives == 0
+            text = result.archives == 0 && result.packs == 0
                        ? tr("This game keeps its shaders in a format Lichii can't read, so none "
                             "are prepared from the game files.")
                        : tr("The game files have no shaders to prepare.");
@@ -213,8 +225,12 @@ void ShaderWarmDialog::OnFinished(const ShaderWarm::Result& result, bool stopped
                         .arg(static_cast<qulonglong>(result.skipped));
         }
         text += QStringLiteral("\n\n") +
-                tr("It is built on the loading screen when Precache shaders before game start is "
-                   "on.");
+                (ShaderWarmRequested(title_id)
+                     ? tr("They are compiled on the loading screen the next time you start the "
+                          "game, on every CPU thread, with every pipeline your earlier sessions "
+                          "saved. Skip stops it; the next start goes on from there.")
+                     : tr("It is built on the loading screen when Precache shaders before game "
+                          "start is on."));
         if (graphics_programs != 0 && !ShaderLibrariesOn()) {
             text += QLatin1Char(' ') +
                     tr("The graphics part also needs Shader libraries, in Configure, Graphics, "

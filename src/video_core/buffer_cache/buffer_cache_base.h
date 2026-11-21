@@ -441,7 +441,11 @@ public:
     void PopAsyncFlushes();
     void PopAsyncBuffers();
 
-    bool DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount);
+    /// gpu_written_dest: the destination ranges that took GPU-written bytes, which guest memory
+    /// doesn't hold until they are downloaded
+    bool DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 amount,
+                 boost::container::small_vector<std::pair<DAddr, size_t>, 4>* gpu_written_dest =
+                     nullptr);
 
     bool DMAClear(GPUVAddr src_address, u64 amount, u32 value);
 
@@ -840,7 +844,7 @@ private:
     [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
                                                bool native_pointer = false,
                                                bool table_pointer = false,
-                                               bool compute = false) const;
+                                               bool compute = false, bool sized = false) const;
 
     void TraceTablePointer(bool compute, size_t stage, size_t ssbo_index, u32 cbuf_index,
                            u32 cbuf_offset, u32 indirect_offset, GPUVAddr holder,

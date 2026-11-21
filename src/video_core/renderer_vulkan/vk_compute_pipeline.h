@@ -12,7 +12,10 @@
 #include <mutex>
 #include <optional>
 #include <span>
+<<<<<<< HEAD
 #include <thread>
+=======
+>>>>>>> origin/nx2
 #include <utility>
 
 #include <boost/container/small_vector.hpp>
@@ -186,12 +189,12 @@ private:
 
     vk::ShaderModule spv_module;
     std::vector<u8> kept_spirv;
-    vk::DescriptorSetLayout descriptor_set_layout;
+    VkDescriptorSetLayout descriptor_set_layout{}; ///< Owned by the PipelineLayoutCache
     bool uses_push_descriptor{false};
     bool uses_descriptor_buffer{false};
     DescriptorBufferLayout descriptor_buffer_layout;
     DescriptorAllocator descriptor_allocator;
-    vk::PipelineLayout pipeline_layout;
+    VkPipelineLayout pipeline_layout{}; ///< Owned by the PipelineLayoutCache
     vk::DescriptorUpdateTemplate descriptor_update_template;
     vk::Pipeline pipeline;
     /// Fast first build (FastFirstBuildEnabled): the optimized pipeline once its build is done, and
@@ -208,8 +211,16 @@ private:
 
     std::function<void()> build_task;
     std::atomic_bool build_claimed{false};
+<<<<<<< HEAD
     /// The thread that ran build_task, for the first dispatch wait log
     std::atomic<std::thread::id> build_thread{};
+=======
+    /// Counts the build as done in the "Building: N shader(s)" status, once: when it ran, or
+    /// when the pipeline went with its build still queued (cancelled, never run).
+    void NotifyBuilt() noexcept;
+    VideoCore::ShaderNotify* build_notify{};
+    std::atomic_bool build_notified{false};
+>>>>>>> origin/nx2
     std::condition_variable build_condvar;
     std::mutex build_mutex;
     std::atomic_bool is_built{false};
