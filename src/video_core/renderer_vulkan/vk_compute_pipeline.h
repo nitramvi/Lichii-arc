@@ -12,10 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
-<<<<<<< HEAD
 #include <thread>
-=======
->>>>>>> origin/nx2
 #include <utility>
 
 #include <boost/container/small_vector.hpp>
@@ -211,16 +208,13 @@ private:
 
     std::function<void()> build_task;
     std::atomic_bool build_claimed{false};
-<<<<<<< HEAD
     /// The thread that ran build_task, for the first dispatch wait log
     std::atomic<std::thread::id> build_thread{};
-=======
     /// Counts the build as done in the "Building: N shader(s)" status, once: when it ran, or
     /// when the pipeline went with its build still queued (cancelled, never run).
     void NotifyBuilt() noexcept;
     VideoCore::ShaderNotify* build_notify{};
     std::atomic_bool build_notified{false};
->>>>>>> origin/nx2
     std::condition_variable build_condvar;
     std::mutex build_mutex;
     std::atomic_bool is_built{false};

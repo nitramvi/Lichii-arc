@@ -11,11 +11,8 @@
 #include <cstddef>
 #include <deque>
 #include <filesystem>
-<<<<<<< HEAD
 #include <fstream>
-=======
 #include <functional>
->>>>>>> origin/nx2
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -205,13 +202,6 @@ private:
     /// Logs the bounded waits' time every 10 s.
     void LogBoundedWaits();
 
-    /// How native work with an unbuilt pipeline is handled: native_async_draws, or Skip with
-    /// EDEN_NX2_ASYNC_DISCARD=1.
-    [[nodiscard]] NativePendingMode NativeMode() const;
-
-    /// Logs the bounded waits' time every 10 s.
-    void LogBoundedWaits();
-
     /// With `keep_pointers`, the slots an evicted pipeline of this key bound stay storage buffer
     /// pointers whatever they hold now. `evicted`: a pipeline of this key was evicted.
     std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
@@ -307,7 +297,6 @@ private:
     /// Cancels the v2 prebuild and waits for its running stages
     void StopBackgroundJobs();
 
-<<<<<<< HEAD
     /// lichii-arc zone prewarm (LICHII_ZONE_PREWARM): cached graphics records left for their
     /// first draw, by key hash, queued for a background build when the guest reads a game file
     /// that earlier sessions' shader provenance ties to them.
@@ -336,11 +325,8 @@ private:
         const ComputePipelineCacheKey& key, VideoCommon::ComputeEnvironment& env,
         const PrecompiledRecord** matched = nullptr);
 
-    void SerializeVulkanPipelineCache(const std::filesystem::path& filename,
-=======
     /// Returns true when the file was written and replaced the previous one.
     bool SerializeVulkanPipelineCache(const std::filesystem::path& filename,
->>>>>>> origin/nx2
                                       const vk::PipelineCache& pipeline_cache, u32 cache_version);
 
     /// Sets vulkan_pipeline_cache_restored when the file's contents were read back.

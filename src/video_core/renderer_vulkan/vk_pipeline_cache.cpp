@@ -771,7 +771,6 @@ vk::ShaderModule EmitComputeModule(const Device& device, const Shader::Profile& 
     kept_spirv = Common::Compression::CompressDataZSTD(reinterpret_cast<const u8*>(code.data()),
                                                        code.size() * sizeof(u32), 1);
     device.SaveShader(code);
-<<<<<<< HEAD
     // Saved as emitted, built from ComputeModuleCode's words (NoInline pass, SPIR-V dump). A
     // precompiled pipeline's preparation keeps the words the module is built from, so its later
     // build from them finds the driver's cached work.
@@ -779,10 +778,7 @@ vk::ShaderModule EmitComputeModule(const Device& device, const Shader::Profile& 
     if (code_out) {
         *code_out = module_code;
     }
-    vk::ShaderModule spv_module{BuildShader(device, module_code)};
-=======
-    vk::ShaderModule spv_module{BuildGuestShader(device, code, shader_hash)};
->>>>>>> origin/nx2
+    vk::ShaderModule spv_module{BuildGuestShader(device, module_code, shader_hash)};
 
     // Text log + .spv dump. Same split as the graphics path.
     const bool should_log = GPU::Logging::IsActive();
@@ -1367,7 +1363,6 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
         vertex_input_lent = false;
         maxwell3d->dirty.flags[Dirty::VertexInput] = true;
     }
-<<<<<<< HEAD
     // lichii-arc: native keys are canonical (#896's precompiled keys match them): a mesh draw's
     // key drops its vertex input there (mask 0), which is what nx2's lent vertex input (#2012)
     // achieves for non-canonical keys, so the lending is not needed on this path.
@@ -1380,18 +1375,6 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
             mask = 0;
         } else if (vertex && !IsUnmaskedVertexProgram(vertex->unique_hash)) {
             mask = vertex->generic_read_mask;
-=======
-    graphics_key.state.Refresh(*maxwell3d, dynamic_features);
-    if (mesh_draw) {
-        // Before the transitions, which hold the lender's key
-        if (!mesh_vertex_inputs_seeded) {
-            mesh_vertex_inputs_seeded = true;
-            for (const auto& [key, pipeline] : graphics_cache) {
-                if (CanSeedMeshVertexInput(pipeline.get())) {
-                    mesh_vertex_inputs.Add(key);
-                }
-            }
->>>>>>> origin/nx2
         }
         graphics_key.state.CanonicalizeNative(mask);
     } else {
@@ -2840,17 +2823,9 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::stop_token stop_loading,
     std::vector<PrecacheJob> jobs;
     const std::filesystem::path warm_file = ShaderWarm::ComputeWarmPath(title_id);
     const std::string path = Common::FS::PathToUTF8String(warm_file);
-<<<<<<< HEAD
     if (ShaderWarm::WarmComputeSkippedEnabled()) {
         SetComputeOriginIndexPath(warm_file.parent_path() / "warm-compute-index.txt");
     }
-    const auto stamp = [&](u64 entries) {
-        return ShaderWarm::CurrentWarmStamp(warm_file, entries, device.GetDriverVersion(),
-                                            device.GetDeviceID(), CACHE_VERSION,
-                                            // NoInlineBits() is 0 unless shared functions are
-                                            // built as calls, so older markers still match.
-                                            WarmVariant() ^ (u64{NoInlineBits()} << 56));
-=======
     // The pipelines built here outlive the run only in the driver's own cache or in the Vulkan
     // pipeline cache saved below; progress is recorded and reused only then. Progress kept in the
     // Vulkan pipeline cache is written once that cache is saved, and read only when this boot's
@@ -2862,8 +2837,9 @@ void PipelineCache::PrecacheShaders(u64 title_id, std::stop_token stop_loading,
     const auto stamp = [&](u64 entries) {
         return ShaderWarm::CurrentWarmStamp(warm_file, entries, device.GetDriverVersion(),
                                             device.GetDeviceID(), CACHE_VERSION,
-                                            WarmVariant(persisted));
->>>>>>> origin/nx2
+                                            // NoInlineBits() is 0 unless shared functions are
+                                            // built as calls, so older markers still match.
+                                            WarmVariant(persisted) ^ (u64{NoInlineBits()} << 56));
     };
     // Compute programs of the precache file, unless a matching marker says they were built.
     size_t file_entries = 0;
@@ -4527,7 +4503,11 @@ void PipelineCache::EvictUnusedPipelines() {
     translated_again = 0;
 }
 
-<<<<<<< HEAD
+bool PipelineCache::SkipPendingMeshDraw() const {
+    return use_asynchronous_shaders && Settings::values.skip_unbuilt_mesh_draws.GetValue() &&
+           maxwell3d->GetNativeMacroEngine().native_turing && maxwell3d->regs.IsMeshEnabled();
+}
+
 void PipelineCache::NoteClear(u64 color_address, u64 depth_address) {
     if (HeavySkipWords() == 0) {
         return;
@@ -4621,10 +4601,6 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
         return pipeline;
     }
     // EDEN_NX2_ASYNC_DISCARD=1: skip native draws whose pipeline is still building instead of
-=======
-NativePendingMode PipelineCache::NativeMode() const {
-    // EDEN_NX2_ASYNC_DISCARD=1: skip native work whose pipeline is still building instead of
->>>>>>> origin/nx2
     // waiting for it (experimental; the draw may be missing for a frame or more).
     /// Reads EDEN_NX2_ASYNC_DISCARD once and logs when it is on.
     static const bool discard_native = [] {
@@ -4635,51 +4611,8 @@ NativePendingMode PipelineCache::NativeMode() const {
         }
         return enabled;
     }();
-    // The environment variable wins over the setting; the setting is read per call.
-    if (discard_native) {
-        return NativePendingMode::Skip;
-    }
-    switch (Settings::values.native_async_draws.GetValue()) {
-    case Settings::NativeAsyncDraws::Bounded:
-        return NativePendingMode::Bounded;
-    case Settings::NativeAsyncDraws::Skip:
-        return NativePendingMode::Skip;
-    default:
-        return NativePendingMode::Wait;
-    }
-}
-
-void PipelineCache::LogBoundedWaits() {
-    static auto window = std::chrono::steady_clock::now();
-    if (std::chrono::steady_clock::now() - window <= std::chrono::seconds{10}) {
-        return;
-    }
-    LOG_INFO(Render_Vulkan,
-             "Bounded pipeline wait: {:.1f} ms spent in the last 10 s (budget {} ms per frame)",
-             static_cast<double>(native_wait_used_us) / 1000.0,
-             Settings::values.native_pipeline_wait_ms.GetValue());
-    native_wait_used_us = 0;
-    window = std::chrono::steady_clock::now();
-}
-
-bool PipelineCache::SkipPendingMeshDraw() const {
-    return use_asynchronous_shaders && Settings::values.skip_unbuilt_mesh_draws.GetValue() &&
-           maxwell3d->GetNativeMacroEngine().native_turing && maxwell3d->regs.IsMeshEnabled();
-}
-
-/// Returns `pipeline` when it is built or the current draw must wait for it, and nullptr when the
-/// draw may be skipped while it builds. Each nullptr returned for an unbuilt pipeline is counted
-/// for the log.
-GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexcept {
-    if (pipeline->IsBuilt()) {
-        return pipeline;
-    }
-    if (!use_asynchronous_shaders) {
-        return pipeline;
-    }
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
     const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
-<<<<<<< HEAD
     pipeline->hold_reason = !native || heavy_skip_words == 0 ? 0 : 1;
     {
         const auto& regs = maxwell3d->regs;
@@ -4762,30 +4695,6 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) noexc
                                return texture_cache.ColorTargetWrittenBeforeThisFrame(rt_index);
                            });
     }
-=======
-    const NativePendingMode mode = native ? NativeMode() : NativePendingMode::Wait;
-    const auto& regs = maxwell3d->regs;
-    // A native draw counts as depth-tested only when every render target it writes color into
-    // was first written in an earlier frame, which the title redraws every frame: Mario Kart World
-    // bakes terrain once with depth-tested draws (b7980efd7), and a bound depth buffer alone
-    // doesn't test (Eglantine #874). Mesh draws wait unless the mesh skip setting is on.
-    const auto writes_color = [&regs](u32 rt_index) {
-        return rt_index < Maxwell::NumRenderTargets &&
-               regs.rt[rt_index].format != Tegra::RenderTargetFormat::NONE &&
-               regs.color_mask[regs.color_mask_common ? 0 : rt_index].raw != 0;
-    };
-    const bool depth_tested =
-        native ? mode != NativePendingMode::Wait && regs.zeta_enable != 0 &&
-                     regs.depth_test_enable != 0 && !regs.IsMeshEnabled() &&
-                     ColorWritesHaveHistory(
-                         std::min<u32>(regs.rt_control.count,
-                                       static_cast<u32>(Maxwell::NumRenderTargets)),
-                         [&regs](u32 i) { return regs.rt_control.Map(i); }, writes_color,
-                         [this](u32 rt_index) {
-                             return texture_cache.ColorTargetWrittenBeforeThisFrame(rt_index);
-                         })
-               : regs.zeta_enable != 0;
->>>>>>> origin/nx2
     // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
     const bool can_discard = CanDiscardPendingDraw(
         native, depth_tested, draw_state.draw_element_count, draw_state.draw_element_count,
@@ -6656,7 +6565,7 @@ bool PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
                 LOG_INFO(Render_Vulkan,
                          "Vulkan driver pipeline cache unchanged ({} MiB), not written again",
                          cache_size >> 20);
-                return;
+                return true;
             }
             cache_data.resize(cache_size);
             pipeline_cache.Read(&cache_size, cache_data.data());
@@ -6690,17 +6599,12 @@ bool PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& fi
         return false;
     }
 
-<<<<<<< HEAD
     vulkan_cache_bytes_on_disk.store(cache_size_written);
     LOG_INFO(Render_Vulkan, "Vulkan driver pipelines cached at: {} ({} MiB in {:.1f} s)",
              Common::FS::PathToUTF8String(filename), cache_size_written >> 20,
              std::chrono::duration<double>(std::chrono::steady_clock::now() - write_begin_outer)
                  .count());
-=======
-    LOG_INFO(Render_Vulkan, "Vulkan driver pipelines cached at: {}",
-             Common::FS::PathToUTF8String(filename));
     return true;
->>>>>>> origin/nx2
 }
 
 vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::path& filename,

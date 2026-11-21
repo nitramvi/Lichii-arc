@@ -40,11 +40,8 @@
 #include "video_core/vulkan_common/graphics_pipeline_library_policy.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
 #include "video_core/vulkan_common/vma.h"
-<<<<<<< HEAD
 #include "video_core/vulkan_common/xess_runtime.h"
-=======
 #include "video_core/vulkan_common/vulkan_address_map.h"
->>>>>>> origin/nx2
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
@@ -905,7 +902,6 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     if (!is_suitable)
         LOG_WARNING(Render_Vulkan, "Unsuitable driver - continuing anyways");
 
-<<<<<<< HEAD
     // lichii-arc diagnostic: whether the driver could build shaders as graphics pipeline libraries
     // (compile each stage once, link per state quickly), the precache approach of Lichii PR #579.
     if (supported_extensions.contains(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME)) {
@@ -923,7 +919,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
                  gpl_props2.properties.limits.maxBoundDescriptorSets);
     } else {
         LOG_INFO(Render_Vulkan, "Graphics pipeline library: not supported");
-=======
+    }
     if (is_radv) {
         // Mesa splits debug options on commas and spaces.
         const char* const radv_debug = std::getenv("RADV_DEBUG");
@@ -937,7 +933,6 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             LOG_INFO(Render_Vulkan, "RADV_DEBUG=hang: shaders carry their program hash, and a "
                                     "device loss waits for RADV's GPU hang report");
         }
->>>>>>> origin/nx2
     }
 
     if (is_nvidia) {

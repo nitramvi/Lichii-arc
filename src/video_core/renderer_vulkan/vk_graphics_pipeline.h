@@ -628,7 +628,6 @@ private:
     u64 kept_scale_epoch{};
     bool kept_images_valid{};
 
-<<<<<<< HEAD
     /// Graphics pipeline libraries (EDEN_NX2_GPL): one descriptor set per stage (set index =
     /// stage index), the shader libraries, and this pipeline's own vertex input and fragment
     /// output libraries.
@@ -650,11 +649,8 @@ private:
     bool linked{};
 
     vk::DescriptorSetLayout descriptor_set_layout;
-=======
-    VkDescriptorSetLayout descriptor_set_layout{}; ///< Owned by the PipelineLayoutCache
->>>>>>> origin/nx2
     DescriptorAllocator descriptor_allocator;
-    VkPipelineLayout pipeline_layout{}; ///< Owned by the PipelineLayoutCache
+    vk::PipelineLayout pipeline_layout;
     vk::DescriptorUpdateTemplate descriptor_update_template;
     vk::Pipeline pipeline;
     /// Fast first build (FastFirstBuildEnabled): the optimized pipeline once its build is done, and

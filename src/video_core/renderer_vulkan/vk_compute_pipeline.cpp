@@ -252,7 +252,7 @@ vk::Pipeline ComputePipeline::MakeComputePipeline(bool fast, bool probe) {
             .pName = "main",
             .pSpecializationInfo = nullptr,
         },
-        .layout = *pipeline_layout,
+        .layout = pipeline_layout,
         .basePipelineHandle = 0,
         .basePipelineIndex = 0,
     };
@@ -353,57 +353,6 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
     }
 
     auto func{[this, shader_notify, pipeline_statistics] {
-<<<<<<< HEAD
-=======
-        const VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_size_ci{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT,
-            .pNext = nullptr,
-            .requiredSubgroupSize = GuestWarpSize,
-        };
-        // Only warp-level ops observe the subgroup size. Forcing 32 on other shaders makes Intel
-        // compile SIMD32, which can spill a register-heavy kernel for minutes (Mario Kart World).
-        // A shader whose divergent barrier lost its execution barrier relies on a whole warp
-        // running in step: at a smaller subgroup size it reads stale shared memory, which shows as
-        // banding over the image in Mario Kart World on Intel's Windows driver.
-        const bool uses_warp_ops = info.demoted_conditional_barrier ||
-                                   info.uses_subgroup_vote || info.uses_subgroup_invocation_id ||
-                                   info.uses_subgroup_shuffles || info.uses_subgroup_mask ||
-                                   info.uses_quad_shuffles || info.uses_fswzadd ||
-                                   info.uses_cooperative_matrix;
-        VkPipelineCreateFlags flags{};
-        if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
-            flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
-        }
-        if (uses_descriptor_buffer) {
-            flags |= VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
-        }
-        if (BuildsUnoptimized(device.GetDriverID(), shader_hash)) {
-            flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;
-        }
-        const VkComputePipelineCreateInfo compute_ci{
-            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = flags,
-            .stage{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .pNext = device.IsExtSubgroupSizeControlSupported() && uses_warp_ops &&
-                                 device.IsGuestWarpSizeSupported(VK_SHADER_STAGE_COMPUTE_BIT)
-                             ? &subgroup_size_ci
-                             : nullptr,
-                .flags = info.uses_cooperative_matrix
-                             ? VkPipelineShaderStageCreateFlags{
-                                   VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT}
-                             : VkPipelineShaderStageCreateFlags{},
-                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-                .module = *spv_module,
-                .pName = "main",
-                .pSpecializationInfo = nullptr,
-            },
-            .layout = pipeline_layout,
-            .basePipelineHandle = 0,
-            .basePipelineIndex = 0,
-        };
->>>>>>> origin/nx2
         try {
             const bool smart =
                 SmartFastBuildEnabled() && device.IsPipelineCreationCacheControlEnabled() && jobs;
@@ -587,11 +536,8 @@ bool ComputePipeline::WaitBuilt(std::chrono::microseconds timeout) {
                                   [this] { return is_built.load(std::memory_order::relaxed); });
 }
 
-<<<<<<< HEAD
 /// Binds the dispatch's buffers, textures and images and records the pipeline and descriptor
 /// binds, swapping in the optimized pipeline once ready and waiting for an unbuilt one.
-=======
->>>>>>> origin/nx2
 ComputePipeline::ConfigureResult ComputePipeline::Configure(
     Tegra::Engines::KeplerCompute& kepler_compute, Tegra::MemoryManager& gpu_memory,
     Scheduler& scheduler, BufferCache& buffer_cache, TextureCache& texture_cache,

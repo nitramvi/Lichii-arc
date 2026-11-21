@@ -88,7 +88,7 @@ namespace Vulkan {
 
 namespace {
 /// lichii-arc (LICHII_OOT_EXTRA_PASS_KEY=<hex>): treat that native program key as the game's
-/// upscale to a 16:9 target (Pass1440p), for render scales whose pass has no known key yet.
+/// upscale to a 16:9 target (Scaled), for render scales whose pass has no known key yet.
 VideoCommon::OcarinaUpscalePass LichiiFindOcarinaUpscalePass(u64 native_key, u64 shader_hash) {
     const auto pass = VideoCommon::FindOcarinaUpscalePass(native_key, shader_hash);
     if (pass != VideoCommon::OcarinaUpscalePass::None) {
@@ -98,7 +98,7 @@ VideoCommon::OcarinaUpscalePass LichiiFindOcarinaUpscalePass(u64 native_key, u64
         const char* value = std::getenv("LICHII_OOT_EXTRA_PASS_KEY");
         return value ? std::strtoull(value, nullptr, 16) : 0ULL;
     }();
-    return extra != 0 && native_key == extra ? VideoCommon::OcarinaUpscalePass::Pass1440p : pass;
+    return extra != 0 && native_key == extra ? VideoCommon::OcarinaUpscalePass::Scaled : pass;
 }
 } // Anonymous namespace
 
@@ -2579,23 +2579,12 @@ void RasterizerVulkan::DispatchCompute() {
     };
     const auto indirect_address = kepler_compute->GetIndirectComputeAddress();
     const auto list_slot = kepler_compute->GetIndirectListSlot();
-<<<<<<< HEAD
-    // The full-size 1080p pass is replaced only by FSR (native AA); DLAA through it is untested.
+    // The full-size pass is refused later (by FSR only) in the replacement itself.
     const auto oot_pass = LichiiFindOcarinaUpscalePass(native_key, pipeline->ShaderHash());
     const bool can_replace = OcarinaTemporalEnabled() &&
                              oot_pass != VideoCommon::OcarinaUpscalePass::None &&
-                             pipeline->CanReplaceOcarinaUpscale() &&
-                             (oot_pass != VideoCommon::OcarinaUpscalePass::FullSize ||
-                              oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr) &&
-                             !indirect_address && !list_slot && !frame_dump.Capturing();
-=======
-    const bool can_replace =
-        OcarinaTemporalEnabled() &&
-        VideoCommon::FindOcarinaUpscalePass(native_key, pipeline->ShaderHash()) !=
-            VideoCommon::OcarinaUpscalePass::None &&
-        pipeline->CanReplaceOcarinaUpscale() && !indirect_address && !list_slot &&
-        !frame_dump.Capturing();
->>>>>>> origin/nx2
+                             pipeline->CanReplaceOcarinaUpscale() && !indirect_address &&
+                             !list_slot && !frame_dump.Capturing();
     // Until a dispatch overwrites the scene, each direct one binds only after the effects are
     // marked. The indirect path records its bind at once.
     const bool marking_effects = oot_effects_frame == render_trace_frame &&
@@ -2613,7 +2602,6 @@ void RasterizerVulkan::DispatchCompute() {
         return;
     case ComputePipeline::ConfigureResult::Skipped:
         return;
-<<<<<<< HEAD
     }
     // lichii-arc (LICHII_DIAG=1): a dispatch that reads one shared-exponent colour image and writes
     // one B10G11R11 image looks like the game's upscale; log unknown ones once, with their key.
@@ -2633,8 +2621,6 @@ void RasterizerVulkan::DispatchCompute() {
                          out.size.width, out.size.height);
             }
         }
-=======
->>>>>>> origin/nx2
     }
     SCOPE_EXIT {
         if (!frame_dump.Capturing()) {
@@ -3666,7 +3652,6 @@ void RasterizerVulkan::TrackOcarinaCamera() {
         values, color.size.width, color.size.height,
         oot_backend == VideoCommon::OcarinaUpscaleBackend::Dlss || allow_padding_env);
     if (camera.issue != VideoCommon::OcarinaCameraIssue::None) {
-<<<<<<< HEAD
         // lichii-arc (LICHII_DIAG=1): why a scene-sized draw's camera was refused, once per change.
         if (Common::LichiiDiag::Enabled()) {
             static std::string last;
@@ -3679,12 +3664,10 @@ void RasterizerVulkan::TrackOcarinaCamera() {
                 LOG_INFO(Render_Vulkan, "LICHII_CAMERA_REFUSED {}", detail);
             }
         }
-=======
         refuse(camera.issue == VideoCommon::OcarinaCameraIssue::Extent
                    ? "no scene camera: its size does not match the scene target"
                    : "no scene camera: unexpected projection",
                values[0x120 / sizeof(f32)], values[0x124 / sizeof(f32)]);
->>>>>>> origin/nx2
         return;
     }
     oot_camera_sample_frame = render_trace_frame;
@@ -3890,17 +3873,13 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
         return false;
     }
     // Logs why the game's own upscale draws, when the reason changes and every 120th repeat.
-<<<<<<< HEAD
-    const auto fail = [this](const char* reason) {
+    const auto fail = [this](const char* reason, std::string_view detail = {}) {
         // lichii-arc (LICHII_DIAG=1): every frame the temporal path falls back to the game's
         // own upscale, to line up visual flashes with marks.
         if (Common::LichiiDiag::Enabled()) {
-            LOG_INFO(Render_Vulkan, "LICHII_TEMPORAL frame={} game upscale: {}", render_trace_frame,
-                     reason);
+            LOG_INFO(Render_Vulkan, "LICHII_TEMPORAL frame={} game upscale: {}{}",
+                     render_trace_frame, reason, detail);
         }
-=======
-    const auto fail = [this](const char* reason, std::string_view detail = {}) {
->>>>>>> origin/nx2
         if (reason != oot_fallback_reason || ++oot_fallback_repeats % 120 == 0) {
             LOG_INFO(Render_Vulkan, "Ocarina temporal: the game's upscale draws frame {} ({}{})",
                      render_trace_frame, reason, detail);
@@ -3955,45 +3934,7 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
     using VideoCore::Surface::PixelFormat;
     const auto extent = oot_motion.extent;
     using enum VideoCommon::OcarinaUpscalePass;
-<<<<<<< HEAD
     const auto pass = LichiiFindOcarinaUpscalePass(native_key, pipeline.ShaderHash());
-    const bool native_size = pass == FullSize;
-    // At the DLSS Performance render scale (1920x1080) the game upscales to 2560x1440 with its
-    // 3/4 pass instead (QuincyForbes' f7d0938b5b). The scale is the one the game started with,
-    // whatever quality is chosen since.
-    const bool three_quarter_1440p = pass == ThreeQuarter &&
-                                     oot_performance_scale && target.size.width == 2560 &&
-                                     target.size.height == 1440;
-    // lichii-arc: with LICHII_OOT_RENDER_SCALE=<number> the game's 3/4 pass takes a scene that is
-    // not 3/4 of its target (e.g. 1589x894 into 1920x1080): check it like the 16:9 pass.
-    const bool custom_three_quarter =
-        pass == ThreeQuarter && Settings::OcarinaCustomRenderScaleWord().has_value() &&
-        !(target.size.width == extent.width * 4 / 3 && target.size.height == extent.height * 4 / 3);
-    const bool pass_1440p = pass == Pass1440p || three_quarter_1440p || custom_three_quarter;
-    // lichii-arc: LICHII_OOT_FSR_1440=1 writes the reconstruction into the game's own 2560x1440
-    // target, as the game's pass does, instead of a separate 3840x2160 image (a 2.25x larger
-    // reconstruction a 1920x1200 handheld screen can't show).
-    static const bool fsr_1440 = [] {
-        const char* value = std::getenv("LICHII_OOT_FSR_1440");
-        return value && value[0] == '1';
-    }();
-    // lichii-arc: in handheld the same pass writes a 1920x1080 target (from a 960x540 scene at
-    // the Ultra Performance scale); the 4K output only follows the docked 2560x1440 one.
-    const bool target_1440p = target.size.width == 2560 && target.size.height == 1440;
-    const bool upscale_4k = pass_1440p && !native_resolution && !fsr_1440 && target_1440p;
-    // The 1440p pass takes any 16:9 scene up to 2560x1440: the DLSS render scales shrink it.
-    const bool valid_extents =
-        pass_1440p ? extent.width <= 2560 && extent.height <= 1440 &&
-                         std::abs(static_cast<int>(extent.width * 9) -
-                                  static_cast<int>(extent.height * 16)) <= 32 &&
-                         (target_1440p ||
-                          // lichii-arc: the handheld 16:9 target, no smaller than the scene
-                          (target.size.width <= 2560 && target.size.height <= 1440 &&
-                           target.size.width >= extent.width &&
-                           target.size.height >= extent.height &&
-                           target.size.width * 9 == target.size.height * 16))
-=======
-    const auto pass = VideoCommon::FindOcarinaUpscalePass(native_key, pipeline.ShaderHash());
     const bool target_1440p = target.size.width == 2560 && target.size.height == 1440;
     // At the DLSS Performance render scale (1920x1080) the game upscales to 2560x1440 with its
     // 3/4 pass instead (QuincyForbes' f7d0938b5b). The scale is the one the game started with,
@@ -4005,7 +3946,18 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
     if (native_size && oot_backend != VideoCommon::OcarinaUpscaleBackend::Fsr) {
         return fail("the full-size pass is replaced only by FSR");
     }
-    const bool upscale_4k = pass_1440p && !native_resolution;
+    // lichii-arc: LICHII_OOT_FSR_1440=1 writes the reconstruction into the game's own 2560x1440
+    // target, as the game's pass does, instead of a separate 3840x2160 image.
+    static const bool fsr_1440 = [] {
+        const char* value = std::getenv("LICHII_OOT_FSR_1440");
+        return value && value[0] == '1';
+    }();
+    const bool upscale_4k = pass_1440p && !native_resolution && !fsr_1440;
+    // lichii-arc: with LICHII_OOT_RENDER_SCALE=<number> the game's 3/4 pass takes a scene that is
+    // not 3/4 of its target (e.g. 1589x894 into 1920x1080): check it like the scaled pass.
+    const bool custom_three_quarter =
+        pass == ThreeQuarter && Settings::OcarinaCustomRenderScaleWord().has_value() &&
+        !(target.size.width == extent.width * 4 / 3 && target.size.height == extent.height * 4 / 3);
     // The 1440p and scaled passes take any 16:9 scene up to their target: the DLSS render scales
     // shrink it docked, and the game's dynamic resolution handheld (854x480 at its floor).
     const bool scaled_scene = extent.width <= target.size.width &&
@@ -4013,8 +3965,7 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
                               std::abs(static_cast<int>(extent.width * 9) -
                                        static_cast<int>(extent.height * 16)) <= 32;
     const bool valid_extents =
-        pass_1440p || pass == Scaled ? scaled_scene
->>>>>>> origin/nx2
+        pass_1440p || pass == Scaled || custom_three_quarter ? scaled_scene
         : native_size ? target.size.width == extent.width && target.size.height == extent.height
                       : target.size.width == extent.width * 4 / 3 &&
                             target.size.height == extent.height * 4 / 3;

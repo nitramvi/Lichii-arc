@@ -1462,9 +1462,7 @@ void TextureCache<P>::LogThresholds() const {
 
 template <class P>
 void TextureCache<P>::TickFrame() {
-<<<<<<< HEAD
     TickThrashGuard();
-=======
     FinishAsyncOverlapDownloads(false);
     if (Common::DkbFrameTrace::Enabled()) {
         static u64 frames{};
@@ -1496,7 +1494,6 @@ void TextureCache<P>::TickFrame() {
             overlap_download_bytes = overlap_download_wait_us = 0;
         }
     }
->>>>>>> origin/nx2
     // Upload buffers grown for one huge image (title 1's 341 MiB terrain layer pools) are freed
     // rather than kept for the rest of the session.
     for (auto* const scratch : {&swizzle_data_buffer, &unswizzle_data_buffer}) {
@@ -3697,10 +3694,7 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
     const u64 previous_load_tick = image.load_tick;
     const u32 previous_storage_written_levels = image.storage_written_levels;
     image.flags &= ~ImageFlagBits::CpuModified;
-<<<<<<< HEAD
-=======
     image.load_tick = modification_tick;
->>>>>>> origin/nx2
     image.storage_written_levels = 0;
 
     // Images uploaded by layer stay tracked while some of their layers are dirty.
