@@ -30,8 +30,10 @@ on:
       - invent-x
       - invent-efhx
       - invent-b
-      # lichii-arc: one test branch per day, diaria-AAAAMMDD
+      # lichii-arc: one test branch per day, diaria-AAAAMMDD (older runs)
       - 'diaria-*'
+      # lichii-arc: the single test branch for the Claw; every push replaces the prueba-claw release
+      - prueba
     # A binary only changes when build inputs change; docs-only pushes skip the build.
     paths:
       - "src/**"
@@ -938,4 +940,51 @@ jobs:
           else
             gh release create "${tag}" daily/* --repo "${GITHUB_REPOSITORY}" --verify-tag \
               --prerelease --title "diaria-${label}" --notes-file daily-notes.md
+          fi
+
+      # lichii-arc: the "prueba" branch publishes the pre-release "prueba-claw" with fixed names:
+      # lichii-prueba.exe, PRUEBA.bat (tools/lichii-arc/prueba/) and lichii-prueba.version (the
+      # commit and build), which PRUEBA.bat compares to download a new exe by itself.
+      - name: Publish Claw test release
+        if: github.ref_name == 'prueba'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="prueba-claw"
+          exe=$(find artifacts -path '*windows-x86_64-pgo*' -name lichii.exe | head -1)
+          if [ -z "$exe" ]; then
+            exe=$(find artifacts -name lichii.exe | head -1)
+          fi
+          if [ -z "$exe" ]; then
+            zip_file=$(find dist artifacts -name '*windows*.zip' | head -1)
+            mkdir unpacked && unzip -q "$zip_file" -d unpacked
+            exe=$(find unpacked -name lichii.exe | head -1)
+          fi
+          test -n "$exe"
+          mkdir claw
+          cp "$exe" claw/lichii-prueba.exe
+          gh api "repos/${GITHUB_REPOSITORY}/contents/tools/lichii-arc/prueba/PRUEBA.bat?ref=${GITHUB_SHA}" \
+            -H "Accept: application/vnd.github.raw" > claw/PRUEBA.bat
+          printf 'build-%s-%s' "${GITHUB_RUN_NUMBER}" "${GITHUB_SHA:0:10}" > claw/lichii-prueba.version
+          if gh api "repos/${GITHUB_REPOSITORY}/contents/tools/lichii-arc/prueba/NOTAS.md?ref=${GITHUB_SHA}" \
+              -H "Accept: application/vnd.github.raw" > claw-notes.md 2>/dev/null; then :; else
+            echo "Prueba para la Claw" > claw-notes.md
+          fi
+          printf '\n\nVersion: build-%s-%s (commit %s)\n' "${GITHUB_RUN_NUMBER}" "${GITHUB_SHA:0:10}" "${GITHUB_SHA}" >> claw-notes.md
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" > /dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" \
+              -f "sha=${GITHUB_SHA}" -F force=true > /dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${tag}" -f "sha=${GITHUB_SHA}" > /dev/null
+          fi
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release upload "${tag}" claw/* --repo "${GITHUB_REPOSITORY}" --clobber
+            gh release edit "${tag}" --repo "${GITHUB_REPOSITORY}" --notes-file claw-notes.md \
+              --title "Prueba Claw" --prerelease
+          else
+            gh release create "${tag}" claw/* --repo "${GITHUB_REPOSITORY}" --verify-tag \
+              --prerelease --title "Prueba Claw" --notes-file claw-notes.md
           fi
