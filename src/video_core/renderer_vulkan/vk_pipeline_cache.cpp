@@ -4759,42 +4759,6 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
     return pipeline;
 }
 
-bool PipelineCache::SkipUnbuiltDispatch(ComputePipeline& pipeline, bool outputs_hold_gpu_data) {
-    if (!use_asynchronous_shaders) {
-        return false;
-    }
-    const NativePendingMode mode = NativeMode();
-    switch (DecideNativePending(mode, outputs_hold_gpu_data, native_wait_budget_us)) {
-    case NativeDrawAction::Wait:
-        if (mode != NativePendingMode::Wait && pipeline.FirstWaitForBuild()) {
-            LOG_INFO(Render_Vulkan,
-                     "Compute pipeline {:016x} is still building: its dispatch waits, its outputs "
-                     "hold no earlier shader results",
-                     pipeline.ShaderHash());
-        }
-        return false;
-    case NativeDrawAction::WaitTimed: {
-        const bool built = WaitWithinBudget(native_wait_budget_us, native_wait_used_us,
-                                            [&](std::chrono::microseconds timeout) {
-                                                return pipeline.WaitBuilt(timeout);
-                                            });
-        LogBoundedWaits();
-        if (built) {
-            return false;
-        }
-        break;
-    }
-    case NativeDrawAction::Skip:
-        break;
-    }
-    static std::atomic<u64> skipped{};
-    if ((skipped.fetch_add(1, std::memory_order_relaxed) & 255) == 0) {
-        LOG_INFO(Render_Vulkan, "Async shaders: {} compute dispatches skipped for unbuilt pipelines",
-                 skipped.load(std::memory_order_relaxed));
-    }
-    return true;
-}
-
 NativePendingMode PipelineCache::NativeMode() const {
     // EDEN_NX2_ASYNC_DISCARD=1: skip native work whose pipeline is still building instead of
     // waiting for it (experimental; the draw may be missing for a frame or more).

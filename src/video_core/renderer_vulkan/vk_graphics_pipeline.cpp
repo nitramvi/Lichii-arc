@@ -2152,7 +2152,7 @@ void GraphicsPipeline::RecordBinding(const PreparedBinding& binding,
                     }
                     const VkDescriptorSet descriptor_set{stage_allocators[stage].Commit()};
                     dev.UpdateDescriptorSet(descriptor_set, *stage_templates[stage],
-                                            static_cast<const u8*>(descriptor_data) +
+                                            reinterpret_cast<const u8*>(descriptor_data) +
                                                 stage_descriptor_offsets[stage]);
                     cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline_layout,
                                               static_cast<u32>(stage), descriptor_set, nullptr);
