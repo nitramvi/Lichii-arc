@@ -487,7 +487,7 @@ jobs:
           start=$(date +%s)
           targets="lichii lichii-cmd"
           if [[ "${{ matrix.platform }}" == windows* ]]; then targets="$targets lichii-updater"; fi
-          cmake --build build/release --target $targets --parallel
+          cmake --build build/release --target $targets --parallel -- -k 0
           ccache --show-stats
           ccache --evict-older-than "$(( $(date +%s) - start + 60 ))s"
           du -sh .ccache .lto-cache 2> /dev/null || true

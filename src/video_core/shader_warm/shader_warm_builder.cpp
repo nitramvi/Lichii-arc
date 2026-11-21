@@ -1022,7 +1022,7 @@ Result BuildWarmFilesWith(Core::System& system, const fs::path& game_path, u64 t
             report(StagePacks, static_cast<size_t>((packs_done + offset) >> 20),
                    static_cast<size_t>(pack_bytes >> 20));
             auto bytes = pack.file->ReadBytes(length, static_cast<size_t>(offset));
-            drain();
+            drain(false);
             return bytes;
         };
         const size_t compute_before = seq;
