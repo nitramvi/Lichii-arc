@@ -369,7 +369,16 @@ u64 CoreTiming::GetClockTicks() const {
         clock = Settings::values.cpu_clock.GetValue();
         sync_core_speed = Settings::values.sync_core_speed.GetValue();
     }
-    if (const u32 target = CpuClockTargetMhz(clock); target != CPU_CLOCK_BASE_MHZ) {
+    // lichii-arc (LICHII_S2_FIXED_COUNTER=1, port of mariohbd/Lichii@8d2746e8 via Orchid): a
+    // Switch 2 title keeps its guest counter at the advertised rate under CPU Boost/Overclock, so
+    // the clock setting stops changing game time there. Switch 1 titles keep the scaling.
+    static const bool s2_fixed_counter = [] {
+        const char* value = std::getenv("LICHII_S2_FIXED_COUNTER");
+        return value && value[0] == '1';
+    }();
+    if (const u32 target = CpuClockTargetMhz(clock);
+        target != CPU_CLOCK_BASE_MHZ &&
+        !(s2_fixed_counter && Settings::CurrentProgramIsSwitch2())) {
         fres = fres * target / CPU_CLOCK_BASE_MHZ;
     }
     if (sync_core_speed) {

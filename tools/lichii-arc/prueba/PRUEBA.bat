@@ -56,6 +56,9 @@ set "LICHII_ZERO_TRIM_CAP=1"
 REM 8) (madrugada) LICHII_FILE_LOG=1: anota en el log las carpetas del juego y los archivos de
 REM    voces/sonido/idioma que lee, para ver por que salen voces en ingles. Solo diagnostico.
 set "LICHII_FILE_LOG=1"
+REM 9) (22/11) LICHII_S2_FIXED_COUNTER=1: en juegos de Switch 2 el reloj del juego no se acelera
+REM    con CPU Boost/Overclock (de Orchid/mariohbd). Sin efecto con el reloj de CPU normal.
+set "LICHII_S2_FIXED_COUNTER=1"
 
 REM --- 3) Lanzar con los mismos argumentos que el bat principal ---
 set "PRUEBA_LANZAR="
