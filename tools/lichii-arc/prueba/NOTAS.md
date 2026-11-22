@@ -2,7 +2,21 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
-## Esta versión (22/11)
+## Esta versión (22/11, tarde)
+
+Lichii-arc al día con Lichii upstream (nx2 al 22/11 14:00 UTC, 17 commits nuevos), conservando GPL, LICHII_SMART_FAST, LICHII_WARM_TESS, XeSS, render scale y FSR 1440 de OoT, thrash guard, staging prewarm y LICHII_S2_FIXED_COUNTER.
+
+Nuevo de upstream (para todos los juegos):
+- #2421: en GPUs sin formato de profundidad D24 (caso Intel Arc) los sombreadores redondean la profundidad a valores D24 como en la Switch: menos z-fighting, sombras con rayas y objetos que parpadean/atraviesan.
+- #2361: Windows conserva la protección de memoria rápida (fastmem) al liberar memoria del juego en partes: menos cuelgues/corrupción raros en juegos que mapean y desmapean mucho.
+- #2415: el GPU retoma escrituras de registros partidas entre llamadas GPFIFO (gráficos rotos ocasionales).
+- #2386: frame gen Optical Flow con búsqueda de bloques gruesa→fina (menos artefactos si usás frame gen).
+- #2435 Xenoblade 2 (tablas de color), #2416 Hyrule Warriors (sombreador de decals), #2411 Wonder S2 Edition a 60 fps integrado, #2436 OpenGL, #2420 archivos en Windows.
+- #2425: hilo de render separado (estilo Fritchii) — **apagado** (EDEN_NX2_RENDER_FOLLOWER); no se prende en la prueba porque no está probado con GPL.
+
+Qué probar: OoT (sesión normal; mirar sombras, pasto y objetos lejanos que antes parpadeaban) y cualquier otro juego que tuviera parpadeo de geometría o z-fighting. Si usás frame gen, compararlo.
+
+## Versión anterior (22/11, madrugada)
 
 Lichii-arc al día con Lichii upstream (nx2 al 22/11), conservando GPL, LICHII_SMART_FAST, LICHII_WARM_TESS, XeSS, render scale y FSR 1440 de OoT, thrash guard y staging prewarm.
 
