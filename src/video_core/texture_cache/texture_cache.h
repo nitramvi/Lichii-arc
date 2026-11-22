@@ -26,6 +26,7 @@
 #include "common/alignment.h"
 #include "common/memory_detect.h"
 #include "common/scope_exit.h"
+#include "video_core/gpu_split.h"
 #include "common/settings.h"
 #include "common/dkb_frame_trace.h"
 #include "common/slot_vector.h"
@@ -51,6 +52,8 @@
 #include "video_core/textures/decoders.h"
 
 namespace VideoCommon {
+
+inline constexpr u64 Xc2ProgramId = 0x0400E95004038001ULL;
 
 /// EDEN_NATIVE_DRAW_DIAGNOSTICS is read once: getenv scans the whole environment block on Windows.
 [[nodiscard]] inline bool NativeDrawDiagnostics() {
@@ -1463,6 +1466,7 @@ void TextureCache<P>::LogThresholds() const {
 template <class P>
 void TextureCache<P>::TickFrame() {
     TickThrashGuard();
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::TickFrame");
     FinishAsyncOverlapDownloads(false);
     if (Common::DkbFrameTrace::Enabled()) {
         static u64 frames{};
@@ -2285,19 +2289,17 @@ typename P::Sampler& TextureCache<P>::GetSampler(SamplerId id) noexcept {
 
 template <class P>
 void TextureCache<P>::SynchronizeDescriptors(bool compute) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::SynchronizeDescriptors");
     if (compute) {
         const bool linked_tsc = kepler_compute->launch_description.linked_tsc;
         const u32 tic_limit = kepler_compute->regs.tic.limit;
-        const u32 tsc_limit = linked_tsc ? tic_limit : kepler_compute->regs.tsc.limit;
-        bool bindings_changed = false;
-        if (channel_state->compute_sampler_table.Synchronize(kepler_compute->regs.tsc.Address(), tsc_limit))
-            bindings_changed = true;
-        if (channel_state->compute_image_table.Synchronize(kepler_compute->regs.tic.Address(), tic_limit))
-            bindings_changed = true;
-        if (bindings_changed) {
-            ++texture_bindings_serial;
-            ++churn.refreshes;
-        }
+        SynchronizeComputeDescriptors({
+            .tic = kepler_compute->regs.tic.Address(),
+            .tic_limit = tic_limit,
+            .tsc = kepler_compute->regs.tsc.Address(),
+            .tsc_limit = linked_tsc ? tic_limit : kepler_compute->regs.tsc.limit,
+            .linked_tsc = linked_tsc,
+        });
     } else {
         const bool linked_tsc = maxwell3d->regs.sampler_binding == Tegra::Engines::Maxwell3D::Regs::SamplerBinding::ViaHeaderBinding;
         const u32 tic_limit = maxwell3d->regs.tex_header.limit;
@@ -2311,6 +2313,20 @@ void TextureCache<P>::SynchronizeDescriptors(bool compute) {
             ++texture_bindings_serial;
             ++churn.refreshes;
         }
+    }
+}
+
+template <class P>
+void TextureCache<P>::SynchronizeComputeDescriptors(const ComputePools& pools) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::SynchronizeComputeDescriptors");
+    bool bindings_changed = false;
+    if (channel_state->compute_sampler_table.Synchronize(pools.tsc, pools.tsc_limit))
+        bindings_changed = true;
+    if (channel_state->compute_image_table.Synchronize(pools.tic, pools.tic_limit))
+        bindings_changed = true;
+    if (bindings_changed) {
+        ++texture_bindings_serial;
+        ++churn.refreshes;
     }
 }
 
@@ -2413,6 +2429,7 @@ bool TextureCache<P>::RescaleRenderTargets() {
 
 template <class P>
 void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::UpdateRenderTargets");
     using namespace VideoCommon::Dirty;
     struct ClearingScope {
         bool& clearing;
@@ -2634,6 +2651,7 @@ FramebufferId TextureCache<P>::GetFramebufferId(const RenderTargets& key) {
 
 template <class P>
 void TextureCache<P>::WriteMemory(DAddr cpu_addr, size_t size) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::WriteMemory");
     if (!async_overlap_downloads.empty()) {
         KeepGuestWrite(cpu_addr, size);
     }
@@ -2647,6 +2665,7 @@ template <class P>
 void TextureCache<P>::MarkImageWritten(ImageId image_id, Image& image, DAddr cpu_addr,
                                        size_t size) {
     VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Invalidation);
+    InvalidateXc2LutViews(image);
     if (image.info.native_tiling && True(image.flags & ImageFlagBits::GpuModified) &&
         HasGuestRange(image) && False(image.flags & ImageFlagBits::NonContiguous) &&
         cpu_addr <= image.cpu_addr && image.cpu_addr_end - cpu_addr <= size) {
@@ -2740,6 +2759,7 @@ bool TextureCache<P>::IsDownloadable(const ImageBase& image) const noexcept {
 
 template <class P>
 void TextureCache<P>::DownloadMemory(DAddr cpu_addr, size_t size) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::DownloadMemory");
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::TextureCache};
     // Write-backs landed for this read: an older image downloaded below leaves their ranges as
     // they are, newest data winning as between write-backs. A range a write-back left to newer
@@ -2829,6 +2849,7 @@ void TextureCache<P>::DownloadMemory(DAddr cpu_addr, size_t size) {
 template <class P>
 std::optional<VideoCore::RasterizerDownloadArea> TextureCache<P>::GetFlushArea(DAddr cpu_addr,
                                                                                u64 size) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::GetFlushArea");
     std::optional<VideoCore::RasterizerDownloadArea> area{};
     ForEachImageInRegion(cpu_addr, size, [&](ImageId, ImageBase& image) {
         if (False(image.flags & ImageFlagBits::GpuModified)) {
@@ -2869,6 +2890,7 @@ std::optional<VideoCore::RasterizerDownloadArea> TextureCache<P>::GetFlushArea(D
 
 template <class P>
 void TextureCache<P>::UnmapMemory(DAddr cpu_addr, size_t size) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::UnmapMemory");
     if (!async_overlap_downloads.empty()) {
         CancelAsyncOverlapDownloads(cpu_addr, size);
     }
@@ -2888,6 +2910,7 @@ void TextureCache<P>::UnmapMemory(DAddr cpu_addr, size_t size) {
 
 template <class P>
 void TextureCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::UnmapGPUMemory");
     if (!async_overlap_downloads.empty()) {
         CancelAsyncOverlapDownloadsGpu(as_id, gpu_addr, size);
     }
@@ -2995,6 +3018,7 @@ template <class P>
 bool TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
                                 const Tegra::Engines::Fermi2D::Surface& src,
                                 const Tegra::Engines::Fermi2D::Config& copy) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::BlitImage");
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::TextureCache};
     // A deferred clear parked before this copy has to land before it: realizing it afterwards
     // starts its clear pass after the copy and wipes what the copy wrote. That is what made
@@ -3580,6 +3604,7 @@ bool TextureCache<P>::IsRescaling(const ImageViewBase& image_view) const noexcep
 
 template <class P>
 bool TextureCache<P>::IsRegionGpuModified(DAddr addr, size_t size) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::IsRegionGpuModified");
     bool is_modified = false;
     ForEachImageInRegion(addr, size, [&is_modified](ImageId, ImageBase& image) {
         if (False(image.flags & ImageFlagBits::GpuModified)) {
@@ -4227,14 +4252,41 @@ ImageViewId TextureCache<P>::CreateImageView(const TICEntry& raw_config, bool& r
         }
     }
     const TICEntry config = TextureViewHeader(raw_config, native);
-    const ImageInfo info(config);
+    ImageInfo info(config);
     if (info.type == ImageType::Buffer) {
         const ImageViewInfo view_info(config, 0);
         return slot_image_views.insert(runtime, info, view_info, config.Address());
     }
     const u32 layer_offset = config.BaseLayer() * info.layer_stride;
     const GPUVAddr image_gpu_addr = config.Address() - layer_offset;
-    const ImageId image_id = FindOrInsertImage(info, image_gpu_addr, RelaxedOptions{}, &retry);
+    ImageId image_id{};
+    const bool xc2_lut =
+        native && info.type == ImageType::e3D && info.format == PixelFormat::A8B8G8R8_UNORM &&
+        info.size == Extent3D{16, 16, 16} && info.resources.levels == 1 && info.num_samples == 1 &&
+        config.IsBlockLinear() && config.load_store_hint != 0 && config.BaseLayer() == 0 &&
+        Settings::GetCurrentProgramID() == Xc2ProgramId;
+    if (xc2_lut) {
+        if (const ImageId native_id = FindImage(info, image_gpu_addr, RelaxedOptions{}); native_id) {
+            const ImageBase& image = slot_images[native_id];
+            if (image.first_written_frame != 0 && image.gpu_addr == image_gpu_addr &&
+                image.info.format == info.format && image.info.size == info.size &&
+                image.IsSafeGpuCopy() && False(image.flags & ImageFlagBits::GuestReplacedContents) &&
+                std::ranges::none_of(image.overlapping_images, [&](ImageId other_id) {
+                    const ImageBase& other = slot_images[other_id];
+                    return !other.info.native_tiling &&
+                           other.modification_tick > image.modification_tick &&
+                           True(other.flags & ImageFlagBits::GpuModified) &&
+                           False(other.flags & (ImageFlagBits::Remapped |
+                                                ImageFlagBits::GuestReplacedContents));
+                })) {
+                image_id = native_id;
+            }
+        }
+        info.maxwell_gob_layout = !image_id;
+    }
+    if (!image_id) {
+        image_id = FindOrInsertImage(info, image_gpu_addr, RelaxedOptions{}, &retry);
+    }
     if (!image_id) {
         return NULL_IMAGE_VIEW_ID;
     }
@@ -4246,6 +4298,7 @@ ImageViewId TextureCache<P>::CreateImageView(const TICEntry& raw_config, bool& r
     ImageViewBase& image_view = slot_image_views[image_view_id];
     image_view.flags |= ImageViewFlagBits::Strong;
     image.flags |= ImageFlagBits::Strong;
+    image.xc2_lut_view |= xc2_lut;
     return image_view_id;
 }
 
@@ -5900,6 +5953,21 @@ void TextureCache<P>::RemoveImageViewReferences(std::span<const ImageViewId> rem
 }
 
 template <class P>
+void TextureCache<P>::InvalidateXc2LutViews(ImageBase& image) {
+    if (!image.xc2_lut_view) {
+        return;
+    }
+    image.xc2_lut_view = false;
+    RemoveImageViewReferences(image.image_view_ids);
+    for (size_t channel : active_channel_ids) {
+        auto& info = channel_storage[channel];
+        info.graphics_image_table.Invalidate();
+        info.compute_image_table.Invalidate();
+    }
+    VideoCommon::Nx2FastDraw::Break(VideoCommon::Nx2FastDraw::Reason::Invalidation);
+}
+
+template <class P>
 void TextureCache<P>::RemoveFramebuffers(std::span<const ImageViewId> removed_views) {
     runtime.FlushDeferredClear();
     auto it = framebuffers.begin();
@@ -5925,6 +5993,15 @@ void TextureCache<P>::MarkModification(ImageBase& image) noexcept {
     image.flags |= ImageFlagBits::GpuModified;
     image.storage_written_levels = 0;
     SetModificationTick(slot_images, image, ++modification_tick);
+    if (image.overlapping_images.empty() || Settings::GetCurrentProgramID() != Xc2ProgramId) {
+        return;
+    }
+    for (ImageId other_id : image.overlapping_images) {
+        ImageBase& other = slot_images[other_id];
+        if (image.info.native_tiling != other.info.native_tiling) {
+            InvalidateXc2LutViews(other);
+        }
+    }
 }
 
 template <class P>
@@ -6325,6 +6402,7 @@ bool TextureCache<P>::ClearCovers(u32 width, u32 height) const {
 
 template <class P>
 void TextureCache<P>::CreateChannel(struct Tegra::Control::ChannelState& channel) {
+    VideoCommon::GpuSplit::RenderOwned("TextureCache::CreateChannel");
     VideoCommon::ChannelSetupCaches<TextureCacheChannelInfo>::CreateChannel(channel);
     const auto it = channel_map.find(channel.bind_id);
     auto* this_state = &channel_storage[it->second];

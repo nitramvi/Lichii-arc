@@ -427,6 +427,14 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
 
         info.dual_source_blend = key.state.attachment0_dual_source_blend != 0;
 
+        const auto zeta_format{static_cast<Tegra::DepthFormat>(key.state.depth_format.Value())};
+        info.quantize_frag_depth_d24 = key.state.depth_enabled != 0 &&
+                                       !device.SupportsD24DepthBuffer() &&
+                                       (zeta_format == Tegra::DepthFormat::Z24_UNORM_S8_UINT ||
+                                        zeta_format == Tegra::DepthFormat::X8Z24_UNORM ||
+                                        zeta_format == Tegra::DepthFormat::S8Z24_UNORM ||
+                                        zeta_format == Tegra::DepthFormat::V8Z24_UNORM);
+
         if (device.IsMoltenVK()) {
             for (size_t i = 0; i < 8; ++i) {
                 const auto format = static_cast<Tegra::RenderTargetFormat>(key.state.color_formats[i]);
@@ -1350,14 +1358,26 @@ void PipelineCache::SaveUsedPipelines() {
                               VideoCommon::ShaderCacheV2::EncodeUsed(record));
 }
 
-GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
+GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline(bool key_unchanged) {
+    VideoCommon::GpuSplit::BackOwned("PipelineCache::CurrentGraphicsPipeline");
 
+    ++graphics_lookups;
+    last_lookup_kept = false;
+    const std::array<u64, 6> hashes = graphics_key.unique_hashes;
     if (!RefreshStages(graphics_key.unique_hashes)) {
         current_pipeline = nullptr;
         return nullptr;
     }
     const bool mesh_draw =
         maxwell3d->GetNativeMacroEngine().native_turing && maxwell3d->regs.IsMeshEnabled();
+    // Refresh would rebuild the key current_pipeline was found with: same registers, programs and
+    // topology (its parts kept behind dirty flags come from the same registers).
+    if (key_unchanged && current_pipeline != nullptr && !mesh_draw && !vertex_input_lent &&
+        hashes == graphics_key.unique_hashes) {
+        last_lookup_kept = true;
+        current_pipeline->MarkUsed(frame_count);
+        return BuiltPipeline(current_pipeline);
+    }
     if (vertex_input_lent && !mesh_draw) {
         // Refresh keeps the key's vertex input until the registers change it.
         vertex_input_lent = false;
@@ -1473,6 +1493,7 @@ bool PipelineCache::StaleNullPointerSlot(const ComputePipelineCacheEntry& entry)
 }
 
 ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
+    VideoCommon::GpuSplit::BackOwned("PipelineCache::CurrentComputePipeline");
 
     const ShaderInfo* const shader{ComputeShader()};
     if (!shader) {
@@ -1551,6 +1572,36 @@ ComputePipeline* PipelineCache::CurrentComputePipeline(u64& native_key) {
     }
     return entry.Get(kepler_compute->IsNativeMode(),
                      kepler_compute->regs.code_loc.Address() + qmd.program_start, key);
+}
+
+ComputePipeline* PipelineCache::UnlentComputePipeline(u64& native_key) {
+    VideoCommon::GpuSplit::BackOwned("PipelineCache::UnlentComputePipeline");
+    const ShaderInfo* const shader{KnownComputeShader()};
+    if (!shader) {
+        return nullptr;
+    }
+    const auto& qmd{kepler_compute->launch_description};
+    const ComputePipelineCacheKey key{
+        .unique_hash = shader->unique_hash,
+        .shared_memory_size = qmd.shared_alloc,
+        .workgroup_size{qmd.block_dim_x, qmd.block_dim_y, qmd.block_dim_z},
+    };
+    const auto it{compute_cache.find(key)};
+    if (it == compute_cache.end()) {
+        return nullptr;
+    }
+    ComputePipelineCacheEntry& entry{it->second};
+    if (!entry.pipeline || entry.pending_rebuild ||
+        (!entry.null_pointer_slots.empty() && entry.rebuilds < MaxComputeRebuilds &&
+         StaleNullPointerSlot(entry)) ||
+        !KnownComputeShaderChecks(shader)) {
+        return nullptr;
+    }
+    native_key = shader->lowered_native ? shader->lowered_native->native_program_key : 0;
+    if (VideoCommon::StutterTrace::Enabled() && !std::exchange(entry.used, true)) {
+        VideoCommon::StutterTrace::CountLookup(VideoCommon::StutterTrace::Lookup::ComputePrebuilt);
+    }
+    return entry.pipeline.get();
 }
 
 /// Loads the title's pipeline cache from disk and builds its pipelines, reporting progress through
@@ -4692,7 +4743,19 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) {
                                          static_cast<u32>(Maxwell::NumRenderTargets)),
                            [&regs](u32 i) { return regs.rt_control.Map(i); }, writes_color,
                            [this](u32 rt_index) {
-                               return texture_cache.ColorTargetWrittenBeforeThisFrame(rt_index);
+                               if (!VideoCommon::GpuSplit::LendsToRender()) {
+                                   return texture_cache.ColorTargetWrittenBeforeThisFrame(
+                                       rt_index);
+                               }
+                               // An unlent draw's lookup asks GPURender's texture cache.
+                               auto& split = VideoCommon::GpuSplit::Get();
+                               split.NoteLookupLend();
+                               bool written{};
+                               split.LendRender([&] {
+                                   written =
+                                       texture_cache.ColorTargetWrittenBeforeThisFrame(rt_index);
+                               });
+                               return written;
                            });
     }
     // Native draws are judged by the heuristic only when a mode other than Wait is chosen.
