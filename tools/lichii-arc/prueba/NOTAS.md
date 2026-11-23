@@ -2,7 +2,20 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
-## Esta versión (23/11, tarde)
+## Esta versión (23/11, noche)
+
+**Objetivo: más FPS en OoT bajando el trabajo de la CPU** (en la Claw OoT va con la CPU al ~100 % y el log muestra ~890 ms de esperas "buffer" cada 10 s). Sigue todo lo de la versión de la tarde (0.667 + XeSS, image reaper, LSFG x2) y upstream al día (nx2 al 23/11 15:45 UTC: #2495 dumps de cuadros, #2498 capturas PNG en el Álbum).
+
+Nuevo nuestro (apagado salvo en PRUEBA-vars.bat):
+- `LICHII_HOT_PAGES=1`: port de conongnang/Lichii a9a832442e (kraibse). Después de cada subida a la GPU, Lichii protege contra escritura las páginas copiadas, y la próxima escritura del juego produce una falla que la desprotege: en OoT ~25.000 llamadas al sistema y ~130.000 páginas por segundo. Una página que el juego reescribe dos veces en 128 cuadros pasa a "caliente": queda sin proteger y se vuelve a subir como mucho una vez por cuadro. Medido en PC (Kokiri): cuadro 25,9 → 24,7 ms, CPU del hilo de la GPU 14,5 → 13,8 ms.
+- `LICHII_GUEST_FAST=1`: port de conongnang/Lichii 855f205be6 (Fritchii EXP35). Las escrituras del juego en memoria que la GPU nunca escribió ya no esperan el candado del buffer cache que el hilo de la GPU tiene mientras dibuja: se juntan y se aplican antes del próximo dibujo. Medido en PC (Castle Town): caminando 52 → 57 fps y menos tirones. `2` = también páginas que escribió la GPU (más agresivo, no se usa).
+
+Qué probar (con PRUEBA.bat, se actualiza solo):
+1. OoT en Kokiri y en el campo de Hyrule: fps de juego (el número de "game FPS" con LSFG), y en el log las esperas `buffer` (antes ~890 ms por 10 s).
+2. Que no haya texturas, agua, pasto o geometría rotos ni parpadeos nuevos. Si los hay: en PRUEBA-vars.bat poner `LICHII_HOT_PAGES` y `LICHII_GUEST_FAST` en 0 (de a uno, para saber cuál fue).
+3. Algún otro juego (`LICHII_HOT_PAGES` actúa en todos; `LICHII_GUEST_FAST` solo en juegos de Switch 2) para descartar regresiones.
+
+## Versión del 23/11, tarde
 
 **Objetivo: más FPS en OoT con XeSS a ~720p.** Además, Lichii upstream al día (nx2 al 23/11, 15 commits nuevos), conservando GPL, LICHII_SMART_FAST, LICHII_WARM_TESS, XeSS, render scale y FSR 1440 de OoT, thrash guard, staging prewarm y LICHII_S2_FIXED_COUNTER.
 

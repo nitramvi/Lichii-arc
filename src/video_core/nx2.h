@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -120,6 +121,23 @@ inline void Nx2ClearGpuWrittenPages() {
         return false;
     }
     return (g_nx2_gpu_written_pages[page / 64].load(std::memory_order_relaxed) >> (page % 64)) & 1;
+}
+
+/// Lichii-arc LICHII_GUEST_FAST (or EDEN_NX2_GUEST_FAST), off by default. Port of conongnang/Lichii
+/// 855f205be6 (Frizti's Fritchii EXP35): guest writes of cached memory are collected for the back's
+/// next FlushCaching instead of OnCPUWrite, which waits for the buffer cache's mutex the back holds
+/// through each draw. 1 = writes to pages the GPU never wrote; 2 = writes to any page.
+[[nodiscard]] inline int Nx2GuestFastMode() {
+    static const int mode = [] {
+        for (const char* name : {"LICHII_GUEST_FAST", "EDEN_NX2_GUEST_FAST"}) {
+            if (const char* value = std::getenv(name); value != nullptr && value[0] != '\0') {
+                const int parsed = std::atoi(value);
+                return parsed < 0 || parsed > 2 ? 0 : parsed;
+            }
+        }
+        return 0;
+    }();
+    return mode;
 }
 
 /// False only when no page of [device_address, device_address + size) has been GPU-written.

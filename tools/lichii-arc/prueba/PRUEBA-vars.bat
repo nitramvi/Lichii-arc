@@ -31,6 +31,15 @@ REM 12) (23/11 tarde) LICHII_IMAGE_REAPER=1: las texturas que se borran se destr
 REM    aparte y no en el hilo de la GPU (de conongnang/Longshot: menos tirones al girar la camara y
 REM    al entrar a zonas). 0 = como antes.
 set "LICHII_IMAGE_REAPER=1"
+REM 13) (23/11 noche) Menos CPU por cuadro (la Claw en OoT va con la CPU al ~100 %):
+REM    LICHII_HOT_PAGES=1: las paginas que el juego reescribe en cada cuadro dejan de protegerse
+REM    contra escritura (OoT: ~25.000 llamadas al sistema por segundo menos; -5 %% de tiempo por
+REM    cuadro medido en PC). LICHII_GUEST_FAST=1: las escrituras del juego en memoria que la GPU
+REM    nunca escribio no esperan el candado que el hilo de la GPU tiene mientras dibuja (las
+REM    esperas "buffer" del log). Los dos de conongnang/Lichii y Fritchii. 0 = como antes.
+REM    SI APARECEN TEXTURAS O GEOMETRIA ROTA: poner los dos en 0.
+set "LICHII_HOT_PAGES=1"
+set "LICHII_GUEST_FAST=1"
 REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del bat de 60 fps): el
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.

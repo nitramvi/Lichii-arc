@@ -42,6 +42,7 @@
 #include "video_core/gpu_trace/recorder.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/rasterizer_download_area.h"
@@ -1129,9 +1130,17 @@ struct Memory::Impl {
             // It is often the case the games like to access wildly different addresses. Hence why I propose
             // we should let the compiler just do it's thing...
             if (current_area.last_address != subaddress) {
+                // LICHII_GUEST_FAST (Fritchii EXP35): collected like a GPU-modified page instead
+                // of asking OnCPUWrite under the caches' mutexes; the back applies collected
+                // writes to the caches at its next FlushCaching, before each draw.
+                const int fast_mode = Tegra::Nx2GuestFastMode();
+                const bool collect_unasked =
+                    fast_mode != 0 && address != 0 && size != 0 &&
+                    Tegra::g_nx2_ampere.load(std::memory_order_relaxed) &&
+                    (fast_mode == 2 || !Tegra::Nx2MayBeGpuWritten(address, size));
                 // Short circuit the need to check for address/size
-                auto const do_collection = (address != 0 && size != 0)
-                    && system.GPU().OnCPUWrite(address, size);
+                auto const do_collection = collect_unasked || ((address != 0 && size != 0)
+                    && system.GPU().OnCPUWrite(address, size));
                 if (do_collection) {
                     current_area.last_address = subaddress;
                 } else {
