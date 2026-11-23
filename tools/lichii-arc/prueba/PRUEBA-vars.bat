@@ -19,9 +19,9 @@ set "LICHII_FILE_LOG=1"
 REM 9) (22/11) LICHII_S2_FIXED_COUNTER=1: en juegos de Switch 2 el reloj del juego no se acelera
 REM    con CPU Boost/Overclock (de Orchid/mariohbd). Sin efecto con el reloj de CPU normal.
 set "LICHII_S2_FIXED_COUNTER=1"
-REM 10) (23/11) LICHII_OOT_RENDER_SCALE=ultra: OoT dibuja la escena mas chica (1280x720) y XeSS la
-REM    agranda a la pantalla. En el campo la GPU estaba al 85%% a 23 fps: menos pixeles = mas fps.
-set "LICHII_OOT_RENDER_SCALE=ultra"
+REM 10) (23/11) LICHII_OOT_RENDER_SCALE=0.667: OoT dibuja la escena a ~1280x720 (era 1440x810) y XeSS
+REM    la agranda a la pantalla. "ultra" (960x540) andaba fluido pero se veia blando.
+set "LICHII_OOT_RENDER_SCALE=0.667"
 REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del bat de 60 fps): el
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.
