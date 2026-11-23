@@ -21,6 +21,7 @@
 #include <span>
 #include <fstream>
 #include <mutex>
+#include <unordered_set>
 #include <string_view>
 #include <string>
 #include <vector>
@@ -3623,6 +3624,34 @@ void RasterizerVulkan::DispatchCompute() {
     // with LICHII_OOT_RENDER_SCALE=0.667): its key is taken as the Scaled pass from its next
     // dispatch on, so XeSS/FSR replace it. TryOcarinaUpscale still checks everything and falls
     // back to the game's own pass when anything doesn't match.
+    // lichii-arc (LICHII_OOT_AUTO_PASS=1 with LICHII_DIAG=1): each unknown one-in/one-out dispatch
+    // once, with what the learner checks, to see why a custom scale's upscale is not learned.
+    if (LichiiOcarinaAutoPassEnabled() && Common::LichiiDiag::Enabled() &&
+        oot_pass == VideoCommon::OcarinaUpscalePass::None &&
+        pipeline->SampledImages().size() == 1 && pipeline->WrittenImages().size() == 1 &&
+        pipeline->SampledImages()[0].id && pipeline->WrittenImages()[0]) {
+        static std::mutex seen_mutex;
+        static std::unordered_set<u64> seen;
+        bool first = false;
+        {
+            std::scoped_lock seen_lock{seen_mutex};
+            first = seen.size() < 256 && seen.insert(native_key).second;
+        }
+        if (first) {
+            const auto& in = texture_cache.GetImageView(pipeline->SampledImages()[0].id);
+            const auto& out = texture_cache.GetImageView(pipeline->WrittenImages()[0]);
+            LOG_INFO(Render_Vulkan,
+                     "LICHII_UPSCALE_CANDIDATE_CS native_key={:#018x} in={} {}x{} out={} {}x{} "
+                     "camera_frame={} scene={}x{} image={}x{} replaceable={} indirect={} list={} "
+                     "temporal={}",
+                     native_key, static_cast<int>(in.format), in.size.width, in.size.height,
+                     static_cast<int>(out.format), out.size.width, out.size.height,
+                     oot_camera_sample_frame == render_trace_frame, oot_motion.extent.width,
+                     oot_motion.extent.height, oot_motion.image_extent.width,
+                     oot_motion.image_extent.height, pipeline->CanReplaceOcarinaUpscale(),
+                     indirect_address.has_value(), list_slot.has_value(), OcarinaTemporalEnabled());
+        }
+    }
     if (LichiiOcarinaAutoPassEnabled() && oot_pass == VideoCommon::OcarinaUpscalePass::None &&
         OcarinaTemporalEnabled() && oot_camera_sample_frame == render_trace_frame &&
         pipeline->CanReplaceOcarinaUpscale() && !indirect_address && !list_slot &&
@@ -5320,9 +5349,9 @@ void RasterizerVulkan::ApplyOcarinaCamera(const ImageView& color, const OcarinaC
         if (Common::LichiiDiag::Enabled()) {
             static std::string last;
             const std::string detail = fmt::format(
-                "issue={} camera={}x{} target={}x{}", static_cast<int>(camera.issue),
+                "issue={} camera={}x{} target={}x{} proj={},{}", static_cast<int>(camera.issue),
                 values[0x120 / sizeof(f32)], values[0x124 / sizeof(f32)], color.size.width,
-                color.size.height);
+                color.size.height, values[0xa8 / sizeof(f32)], values[0xac / sizeof(f32)]);
             if (detail != last) {
                 last = detail;
                 LOG_INFO(Render_Vulkan, "LICHII_CAMERA_REFUSED {}", detail);
