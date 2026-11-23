@@ -22,3 +22,7 @@ set "LICHII_S2_FIXED_COUNTER=1"
 REM 10) (23/11) LICHII_OOT_RENDER_SCALE=ultra: OoT dibuja la escena mas chica (1280x720) y XeSS la
 REM    agranda a la pantalla. En el campo la GPU estaba al 85%% a 23 fps: menos pixeles = mas fps.
 set "LICHII_OOT_RENDER_SCALE=ultra"
+REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del bat de 60 fps): el
+REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
+REM    principal la vuelve a apagar cuando lo abris.
+powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^frame_gen\\default=.*','frame_gen\default=false' -replace '^frame_gen=.*','frame_gen=true' -replace '^frame_gen_type\\default=.*','frame_gen_type\default=false' -replace '^frame_gen_type=.*','frame_gen_type=0' -replace '^frame_gen_multiplier\\default=.*','frame_gen_multiplier\default=false' -replace '^frame_gen_multiplier=.*','frame_gen_multiplier=2' | Set-Content $f"
