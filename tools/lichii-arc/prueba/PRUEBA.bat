@@ -9,7 +9,8 @@ REM  (compara lichii-prueba.version con la del release "prueba-claw").
 REM  Que trae cada version: notas del release prueba-claw en GitHub.
 REM
 REM  Este bat NO modifica OoT-Lichii-Arc.bat: copia sus lineas "set" (la misma
-REM  configuracion), suma las variables de prueba y lanza lichii-prueba.exe
+REM  configuracion), suma las variables de prueba (PRUEBA-vars.bat, que se
+REM  actualiza sola con cada version) y lanza lichii-prueba.exe
 REM  en lugar de lichii-menu3.exe. Va en la misma carpeta que esos archivos.
 REM ==========================================================================
 cd /d "%~dp0"
@@ -24,8 +25,10 @@ curl.exe -s -L --fail -o "%~dp0lichii-prueba.version.tmp" "%PRUEBA_URL%/lichii-p
 if exist "%~dp0lichii-prueba.version.tmp" del "%~dp0lichii-prueba.version.tmp"
 if defined PRUEBA_HAY if not "%PRUEBA_TIENE%"=="%PRUEBA_HAY%" (
   echo Bajando la version nueva de prueba: %PRUEBA_HAY%
+  curl.exe -s -L --fail -o "%~dp0PRUEBA-vars.bat.tmp" "%PRUEBA_URL%/PRUEBA-vars.bat" && move /y "%~dp0PRUEBA-vars.bat.tmp" "%~dp0PRUEBA-vars.bat" >nul
   curl.exe -L --fail -o "%~dp0%PRUEBA_EXE%.tmp" "%PRUEBA_URL%/lichii-prueba.exe" && move /y "%~dp0%PRUEBA_EXE%.tmp" "%~dp0%PRUEBA_EXE%" >nul && (echo %PRUEBA_HAY%)>"%~dp0lichii-prueba.version"
 )
+if not exist "%~dp0PRUEBA-vars.bat" curl.exe -s -L --fail -o "%~dp0PRUEBA-vars.bat" "%PRUEBA_URL%/PRUEBA-vars.bat"
 if not exist "%~dp0%PRUEBA_EXE%" (
   echo No pude bajar el exe de prueba. Bajalo a mano del release prueba-claw, renombralo a %PRUEBA_EXE% y copialo a %~dp0
   pause
@@ -43,22 +46,8 @@ for /f "usebackq tokens=* delims=" %%L in (`findstr /r /i /c:"^[ 	]*set[ 	][ 	]*
 )
 
 :nuevas
-REM --- 2) Variables nuevas de esta prueba (1 = prendida, 0 = apagada) ---
-set "LICHII_COMPUTE_SKIP=1"
-set "LICHII_DRAW_HISTORY_GUARD=1"
-set "LICHII_TC_THRASH_GUARD=1"
-set "LICHII_STAGING_PREWARM=1"
-set "LICHII_MEM_PREWARM=0"
-set "LICHII_OOT_TEX_GAP=1"
-REM 7) (noche) LICHII_ZERO_TRIM_CAP=1: la limpieza de memoria en ceros de Windows se hace en
-REM    pedazos de 1 MiB (upstream #2233, de Fritchii): una sola llamada larga frenaba al juego.
-set "LICHII_ZERO_TRIM_CAP=1"
-REM 8) (madrugada) LICHII_FILE_LOG=1: anota en el log las carpetas del juego y los archivos de
-REM    voces/sonido/idioma que lee, para ver por que salen voces en ingles. Solo diagnostico.
-set "LICHII_FILE_LOG=1"
-REM 9) (22/11) LICHII_S2_FIXED_COUNTER=1: en juegos de Switch 2 el reloj del juego no se acelera
-REM    con CPU Boost/Overclock (de Orchid/mariohbd). Sin efecto con el reloj de CPU normal.
-set "LICHII_S2_FIXED_COUNTER=1"
+REM --- 2) Variables de esta prueba: estan en PRUEBA-vars.bat, que se baja junto con el exe ---
+if exist "%~dp0PRUEBA-vars.bat" call "%~dp0PRUEBA-vars.bat"
 
 REM --- 3) Lanzar con los mismos argumentos que el bat principal ---
 set "PRUEBA_LANZAR="

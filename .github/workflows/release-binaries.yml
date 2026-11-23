@@ -949,7 +949,8 @@ jobs:
           fi
 
       # lichii-arc: the "prueba" branch publishes the pre-release "prueba-claw" with fixed names:
-      # lichii-prueba.exe, PRUEBA.bat (tools/lichii-arc/prueba/) and lichii-prueba.version (the
+      # lichii-prueba.exe, PRUEBA.bat and PRUEBA-vars.bat (tools/lichii-arc/prueba/; PRUEBA.bat
+      # downloads the vars with each new exe) and lichii-prueba.version (the
       # commit and build), which PRUEBA.bat compares to download a new exe by itself.
       - name: Publish Claw test release
         if: github.ref_name == 'prueba'
@@ -973,6 +974,8 @@ jobs:
           cp "$exe" claw/lichii-prueba.exe
           gh api "repos/${GITHUB_REPOSITORY}/contents/tools/lichii-arc/prueba/PRUEBA.bat?ref=${GITHUB_SHA}" \
             -H "Accept: application/vnd.github.raw" > claw/PRUEBA.bat
+          gh api "repos/${GITHUB_REPOSITORY}/contents/tools/lichii-arc/prueba/PRUEBA-vars.bat?ref=${GITHUB_SHA}" \
+            -H "Accept: application/vnd.github.raw" > claw/PRUEBA-vars.bat
           printf 'build-%s-%s' "${GITHUB_RUN_NUMBER}" "${GITHUB_SHA:0:10}" > claw/lichii-prueba.version
           if gh api "repos/${GITHUB_REPOSITORY}/contents/tools/lichii-arc/prueba/NOTAS.md?ref=${GITHUB_SHA}" \
               -H "Accept: application/vnd.github.raw" > claw-notes.md 2>/dev/null; then :; else
