@@ -1371,7 +1371,20 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     functions.vkAllocateMemory = TimedAllocateMemory;
     functions.vkFreeMemory = TimedFreeMemory;
 
-    VmaAllocatorCreateFlags flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
+    // lichii-arc: LICHII_IMAGE_REAPER=1 (or EDEN_NX2_IMAGE_REAPER=1) frees deleted images on a
+    // thread of their own, so VMA takes its own locks then. Off by default: VMA stays externally
+    // synchronized and the frees stay on the GPU thread, as before.
+    allocator_thread_safe = [] {
+        for (const char* name : {"LICHII_IMAGE_REAPER", "EDEN_NX2_IMAGE_REAPER"}) {
+            const char* value = std::getenv(name);
+            if (value != nullptr && value[0] == '1') {
+                return true;
+            }
+        }
+        return false;
+    }();
+    VmaAllocatorCreateFlags flags =
+        allocator_thread_safe ? 0 : VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
     if (extensions.memory_budget) {
         flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     }

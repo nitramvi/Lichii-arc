@@ -292,6 +292,11 @@ public:
         return allocator;
     }
 
+    /// VMA locks internally (EDEN_NX2_IMAGE_REAPER): images may be freed on another thread.
+    bool IsAllocatorThreadSafe() const {
+        return allocator_thread_safe;
+    }
+
     /// Allocations kept out of the default blocks, which then hold images only: churned buffers
     /// and long-lived sparse pages left holes the texture cache's collector couldn't drain.
     enum class SeparatePool : u32 {
@@ -1451,6 +1456,7 @@ private:
 private:
     VkInstance instance;         ///< Vulkan instance.
     VmaAllocator allocator{};    ///< VMA allocator.
+    bool allocator_thread_safe{}; ///< VMA created without external synchronization.
     mutable std::mutex separate_pools_mutex;
     mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>, 2> separate_pools{};
     vk::DeviceDispatch dld;      ///< Device function pointers.

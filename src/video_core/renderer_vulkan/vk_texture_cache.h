@@ -17,6 +17,7 @@
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_dlss_network_probe.h"
 #include "video_core/renderer_vulkan/vk_fsr3_upscaler.h"
+#include "video_core/renderer_vulkan/vk_image_reaper.h"
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/renderer_vulkan/vk_streamline_dlss.h"
 #endif
@@ -112,6 +113,15 @@ public:
     void FreeDeferredStagingBuffer(StagingBufferRef& ref);
 
     void TickFrame();
+
+    /// The texture cache lets go of a deleted image the GPU is done with: its memory goes to the
+    /// image reaper (EDEN_NX2_IMAGE_REAPER), or, while memory is short, is freed here along with
+    /// what the reaper still holds.
+    void ReapImage(Image& image, u64 bytes, bool short_of_memory);
+
+    [[nodiscard]] bool HasImageReaper() const noexcept {
+        return image_reaper.has_value();
+    }
 
     void FlushDeferredClear();
 
@@ -411,6 +421,9 @@ public:
         bool used_this_frame{};
     };
     std::vector<ColorFeedbackSnapshot> color_feedback_snapshots;
+
+    /// Last: joined before anything else of the runtime is destroyed.
+    std::optional<ImageReaper> image_reaper;
 };
 
 class Framebuffer {
@@ -644,9 +657,15 @@ public:
 
     u64 allocation_tick;
 
+    /// Hands the objects holding the image's memory to `reaper`; false when they stay (a sparse
+    /// image, or the reaper's queue is full) and are destroyed with the image.
+    bool ReleaseToReaper(ImageReaper& reaper, u64 bytes);
+
     friend class BlockLinearUnswizzle3DPass;
 
 private:
+    void EraseResolveShadows();
+
     bool BlitScaleHelper(bool scale_up);
 
     bool NeedsScaleHelper() const;

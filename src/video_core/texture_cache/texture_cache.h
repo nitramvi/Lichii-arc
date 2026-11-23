@@ -1507,9 +1507,36 @@ void TextureCache<P>::TickFrame() {
         }
     }
     if constexpr (requires { runtime.CurrentTick(); }) {
+        // lichii-arc (LICHII_IMAGE_REAPER=1, port of conongnang/Lichii 493e7fa5 / Longshot #792):
+        // the freed images' Vulkan objects go to a thread of their own instead of being destroyed
+        // here. Asked on every free while memory is short, so the queue is emptied at once.
+        bool reaping = false;
+        if constexpr (requires { runtime.HasImageReaper(); }) {
+            reaping = runtime.HasImageReaper() && !gpu_sentenced_images.empty();
+        }
+        bool short_of_memory = false;
+        if (reaping) {
+            if constexpr (requires { runtime.FailedImages(); }) {
+                short_of_memory |= runtime.FailedImages() != seen_failed_images;
+            }
+            if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
+                short_of_memory |= runtime.CanReportMemoryUsage() &&
+                                   runtime.GetDeviceMemoryUsage() + (u64{1} << 30) >=
+                                       runtime.GetDeviceMemoryBudget();
+            }
+            if (const auto commit_room = Common::GetProcessCommitRoom()) {
+                short_of_memory |= *commit_room < HostCommitReserve;
+            }
+        }
         while (!gpu_sentenced_images.empty() &&
                runtime.IsFree(gpu_sentenced_images.front().tick)) {
-            gpu_sentenced_bytes -= gpu_sentenced_images.front().bytes;
+            GpuSentencedImage& sentenced = gpu_sentenced_images.front();
+            gpu_sentenced_bytes -= sentenced.bytes;
+            if constexpr (requires { runtime.HasImageReaper(); }) {
+                if (reaping) {
+                    runtime.ReapImage(sentenced.image, sentenced.bytes, short_of_memory);
+                }
+            }
             gpu_sentenced_images.pop_front();
         }
         while (!retained_image_keepers.empty() &&

@@ -1341,6 +1341,11 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
       render_pass_cache{render_pass_cache_}, descriptor_pool{descriptor_pool_},
       compute_pass_descriptor_queue{compute_pass_descriptor_queue_},
       resolution{Settings::values.resolution_info} {
+    if (device.IsAllocatorThreadSafe()) {
+        // Longshot's cap (#1914): an eighth of the card's memory, 128 MiB to 1 GiB.
+        using namespace Common::Literals;
+        image_reaper.emplace(std::clamp<u64>(device.GetDeviceLocalMemory() / 8, 128_MiB, 1_GiB));
+    }
     // Before anything below reads astc_recompression (passes, view formats).
     UseBc3ForSwitch2OnSmallCards(device);
     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
@@ -3196,6 +3201,17 @@ void TextureCacheRuntime::ReleaseMsaaScratchImage(VkImage image) {
     }
 }
 
+void TextureCacheRuntime::ReapImage(Image& image, u64 bytes, bool short_of_memory) {
+    if (!image_reaper) {
+        return;
+    }
+    if (short_of_memory) {
+        image_reaper->Drain();
+        return;
+    }
+    image.ReleaseToReaper(*image_reaper, bytes);
+}
+
 void TextureCacheRuntime::TickFrame() {
     // Descriptor allocation/capture can submit between the copy and the draw. Retire at the
     // frame boundary, after all consuming draws, rather than using the copy's submission tick.
@@ -3377,6 +3393,10 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
 Image::Image(const VideoCommon::NullImageParams& params) : VideoCommon::ImageBase{params} {}
 
 Image::~Image() {
+    EraseResolveShadows();
+}
+
+void Image::EraseResolveShadows() {
     if (ENABLE_MSAA_RESOLVE_CONSUME && runtime != nullptr) {
         if (original_image) {
             runtime->EraseResolveShadow(*original_image);
@@ -3385,6 +3405,31 @@ Image::~Image() {
             runtime->EraseResolveShadow(*scaled_image);
         }
     }
+}
+
+bool Image::ReleaseToReaper(ImageReaper& reaper, u64 bytes) {
+    if (sparse_layers.allocator != nullptr || !original_image) {
+        return false;
+    }
+    // Keyed by the VkImage: erased while the handle is still here.
+    EraseResolveShadows();
+    ImageReaper::Objects objects;
+    objects.views.reserve(storage_image_views.size() + storage_layer_views.size());
+    for (auto* const views : {&storage_image_views, &storage_layer_views}) {
+        for (vk::ImageView& view : *views) {
+            if (view) {
+                objects.views.push_back(std::move(view));
+            }
+        }
+        views->clear();
+    }
+    objects.original = std::move(original_image);
+    objects.scaled = std::move(scaled_image);
+    objects.buffer = std::move(compute_unswizzle_buffer);
+    has_compute_unswizzle_buffer = false;
+    objects.bytes = bytes;
+    // Refused (queue full): `objects` is destroyed here, as without the reaper.
+    return reaper.Push(std::move(objects));
 }
 
 void Image::AllocateComputeUnswizzleBuffer(u32 max_slices) {
