@@ -2,7 +2,28 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
-## Esta versión (22/11, tarde)
+## Esta versión (23/11, tarde)
+
+**Objetivo: más FPS en OoT con XeSS a ~720p.** Además, Lichii upstream al día (nx2 al 23/11, 15 commits nuevos), conservando GPL, LICHII_SMART_FAST, LICHII_WARM_TESS, XeSS, render scale y FSR 1440 de OoT, thrash guard, staging prewarm y LICHII_S2_FIXED_COUNTER.
+
+Nuevo nuestro (apagado salvo en PRUEBA-vars.bat):
+- `LICHII_OOT_AUTO_PASS=1`: con una escala propia (`LICHII_OOT_RENDER_SCALE=0.667`, escena 1308x736) el juego usa un pase de agrandado que Lichii no conocía, y XeSS nunca entraba. Ahora, si en un cuadro con cámara de escena aparece un pase que lee la escena (formato E5B9G9R9, tamaño de la escena) y escribe una imagen 16:9 más grande (B10G11R11), se toma como el pase de agrandado y XeSS lo reemplaza desde el cuadro siguiente. Todas las demás verificaciones siguen; si algo no coincide, queda el pase del juego. Log: `LICHII_UPSCALE_LEARNED`.
+- `LICHII_IMAGE_REAPER=1`: las texturas borradas se destruyen en un hilo aparte (port de conongnang/Lichii 493e7fa5, de Longshot #792/#1914: −70 % de tiempo liberando imágenes en el hilo de render, p99 de 10,9 a 3,4 ms al llegar al campo de Hyrule, medido en NVIDIA). Con poca memoria vacía la cola enseguida.
+
+Nuevo de upstream (para todos los juegos, sin variables):
+- #2481: corta los envíos a la GPU en los bordes de render pass (port de conongnang/Longshot): la GPU empieza antes.
+- #2449: sin trabajo de más del hilo de render cuando está apagado (nuestro caso): menos CPU por dibujo.
+- #2215 / #2173: menos trabajo por dibujo en el buffer cache (medido en DK Bananza, ayuda a cualquier juego con mucho dibujo).
+- #1640: los búferes presentados se liberan por fences cuando ya se compusieron.
+- #2485 / #2488: texturas retiradas se mantienen hasta su tick (arreglo de corrupción/cuelgues), #2464 SMAA/FSR 3 sin bordes viejos, #2459 Mario Kart World, #2470 / #2452 DK Bananza y Kirby, #2480 shaders.
+
+Qué probar (con PRUEBA.bat, se actualiza solo):
+1. OoT en Kokiri y en el campo de Hyrule: fps (con LSFG x2), nitidez comparada con la escala del bat principal, y si en el log aparecen `LICHII_UPSCALE_LEARNED` y `XeSS evaluated`.
+2. Tirones al girar la cámara rápido y al entrar/salir de zonas (image reaper).
+3. Algún otro juego que uses, para ver que nada se rompió.
+- Si 0.667 se ve peor o más lento: en PRUEBA-vars.bat cambiar `0.667` por `performance`.
+
+## Versión anterior (22/11, tarde)
 
 Lichii-arc al día con Lichii upstream (nx2 al 22/11 14:00 UTC, 17 commits nuevos), conservando GPL, LICHII_SMART_FAST, LICHII_WARM_TESS, XeSS, render scale y FSR 1440 de OoT, thrash guard, staging prewarm y LICHII_S2_FIXED_COUNTER.
 
@@ -16,7 +37,7 @@ Nuevo de upstream (para todos los juegos):
 
 Qué probar: OoT (sesión normal; mirar sombras, pasto y objetos lejanos que antes parpadeaban) y cualquier otro juego que tuviera parpadeo de geometría o z-fighting. Si usás frame gen, compararlo.
 
-## Versión anterior (22/11, madrugada)
+## Versión del 22/11, madrugada
 
 Lichii-arc al día con Lichii upstream (nx2 al 22/11), conservando GPL, LICHII_SMART_FAST, LICHII_WARM_TESS, XeSS, render scale y FSR 1440 de OoT, thrash guard y staging prewarm.
 

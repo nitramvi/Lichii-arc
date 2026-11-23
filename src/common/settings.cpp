@@ -124,7 +124,8 @@ std::optional<u32> OcarinaCustomRenderScaleWord() {
 }
 
 std::optional<NvidiaDlssQuality> OcarinaDlssRenderScale() {
-    // lichii-arc: LICHII_OOT_RENDER_SCALE=ultra (1280x720) or performance (1920x1080) renders
+    // lichii-arc: LICHII_OOT_RENDER_SCALE=ultra (1280x720 docked, 960x540
+    // into a 1920x1080 target) or performance (1920x1080 docked, 1440x810 at 1080p) renders
     // Ocarina of Time's scene smaller on any GPU and mode; the render-scaled path upscales it
     // with FSR 3.1 when DLSS isn't available (SelectOcarinaUpscaler).
     if (const char* scale = std::getenv("LICHII_OOT_RENDER_SCALE")) {

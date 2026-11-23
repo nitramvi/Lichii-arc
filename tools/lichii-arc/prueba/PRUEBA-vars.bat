@@ -19,8 +19,18 @@ set "LICHII_FILE_LOG=1"
 REM 9) (22/11) LICHII_S2_FIXED_COUNTER=1: en juegos de Switch 2 el reloj del juego no se acelera
 REM    con CPU Boost/Overclock (de Orchid/mariohbd). Sin efecto con el reloj de CPU normal.
 set "LICHII_S2_FIXED_COUNTER=1"
-REM 10) (23/11) Escala de OoT: queda la del bat principal (1440x810 con XeSS). Probado: "ultra"
-REM    (960x540) fluido pero blando; 0.667 (~720p) hace que XeSS no tome la escena (falta codigo).
+REM 10) (23/11 tarde) Escala de OoT ~720p CON XeSS: LICHII_OOT_RENDER_SCALE=0.667 dibuja la escena a
+REM    1308x736 (era 1440x810) y LICHII_OOT_AUTO_PASS=1 reconoce el pase de agrandado del juego a esa
+REM    escala para que XeSS lo reemplace (antes quedaba el escalado del juego, feo y lento).
+REM    En el log tiene que aparecer "LICHII_UPSCALE_LEARNED" y despues "XeSS evaluated".
+REM    SI SE VE PEOR O MAS LENTO: cambiar 0.667 por performance (la escala del bat principal).
+set "LICHII_OOT_RENDER_SCALE=0.667"
+set "LICHII_OOT_ALLOW_PADDING=1"
+set "LICHII_OOT_AUTO_PASS=1"
+REM 12) (23/11 tarde) LICHII_IMAGE_REAPER=1: las texturas que se borran se destruyen en un hilo
+REM    aparte y no en el hilo de la GPU (de conongnang/Longshot: menos tirones al girar la camara y
+REM    al entrar a zonas). 0 = como antes.
+set "LICHII_IMAGE_REAPER=1"
 REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del bat de 60 fps): el
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.

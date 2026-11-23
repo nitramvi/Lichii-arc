@@ -106,6 +106,31 @@ namespace Vulkan {
 namespace {
 /// lichii-arc (LICHII_OOT_EXTRA_PASS_KEY=<hex>): treat that native program key as the game's
 /// upscale to a 16:9 target (Scaled), for render scales whose pass has no known key yet.
+/// lichii-arc (LICHII_OOT_AUTO_PASS=1): native keys of upscale passes recognized at run time
+/// (LichiiLearnOcarinaUpscalePass), taken as Scaled from their next dispatch on.
+bool LichiiOcarinaAutoPassEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_OOT_AUTO_PASS");
+        return value && value[0] == '1';
+    }();
+    return enabled;
+}
+std::mutex lichii_learned_pass_mutex;
+std::set<u64> lichii_learned_pass_keys;
+
+bool LichiiLearnedOcarinaUpscalePass(u64 native_key) {
+    if (!LichiiOcarinaAutoPassEnabled()) {
+        return false;
+    }
+    std::scoped_lock lock{lichii_learned_pass_mutex};
+    return lichii_learned_pass_keys.contains(native_key);
+}
+
+bool LichiiLearnOcarinaUpscalePass(u64 native_key) {
+    std::scoped_lock lock{lichii_learned_pass_mutex};
+    return lichii_learned_pass_keys.insert(native_key).second;
+}
+
 VideoCommon::OcarinaUpscalePass LichiiFindOcarinaUpscalePass(u64 native_key, u64 shader_hash) {
     const auto pass = VideoCommon::FindOcarinaUpscalePass(native_key, shader_hash);
     if (pass != VideoCommon::OcarinaUpscalePass::None) {
@@ -115,7 +140,10 @@ VideoCommon::OcarinaUpscalePass LichiiFindOcarinaUpscalePass(u64 native_key, u64
         const char* value = std::getenv("LICHII_OOT_EXTRA_PASS_KEY");
         return value ? std::strtoull(value, nullptr, 16) : 0ULL;
     }();
-    return extra != 0 && native_key == extra ? VideoCommon::OcarinaUpscalePass::Scaled : pass;
+    if ((extra != 0 && native_key == extra) || LichiiLearnedOcarinaUpscalePass(native_key)) {
+        return VideoCommon::OcarinaUpscalePass::Scaled;
+    }
+    return pass;
 }
 } // Anonymous namespace
 
@@ -3574,6 +3602,33 @@ void RasterizerVulkan::DispatchCompute() {
         return;
     case ComputePipeline::ConfigureResult::Skipped:
         return;
+    }
+    // lichii-arc (LICHII_OOT_AUTO_PASS=1): an unknown dispatch that, in a frame whose scene camera
+    // was taken, reads one scene-sized shared-exponent colour image and writes one larger 16:9
+    // B10G11R11 image is the game's upscale at a custom render scale (e.g. 1308x736 -> 1920x1080
+    // with LICHII_OOT_RENDER_SCALE=0.667): its key is taken as the Scaled pass from its next
+    // dispatch on, so XeSS/FSR replace it. TryOcarinaUpscale still checks everything and falls
+    // back to the game's own pass when anything doesn't match.
+    if (LichiiOcarinaAutoPassEnabled() && oot_pass == VideoCommon::OcarinaUpscalePass::None &&
+        OcarinaTemporalEnabled() && oot_camera_sample_frame == render_trace_frame &&
+        pipeline->CanReplaceOcarinaUpscale() && !indirect_address && !list_slot &&
+        pipeline->SampledImages().size() == 1 && pipeline->WrittenImages().size() == 1 &&
+        pipeline->SampledImages()[0].id && pipeline->WrittenImages()[0]) {
+        const auto& in = texture_cache.GetImageView(pipeline->SampledImages()[0].id);
+        const auto& out = texture_cache.GetImageView(pipeline->WrittenImages()[0]);
+        using VideoCore::Surface::PixelFormat;
+        const bool wide_16_9 = std::abs(static_cast<int>(out.size.width * 9) -
+                                        static_cast<int>(out.size.height * 16)) <= 32;
+        if (in.format == PixelFormat::E5B9G9R9_FLOAT && out.format == PixelFormat::B10G11R11_FLOAT &&
+            oot_motion.SceneSized(in.size.width, in.size.height) && wide_16_9 &&
+            out.size.width >= 1280 && out.size.width > in.size.width &&
+            out.size.height > in.size.height && LichiiLearnOcarinaUpscalePass(native_key)) {
+            LOG_INFO(Render_Vulkan,
+                     "LICHII_UPSCALE_LEARNED native_key={:#018x} shader={:016x} in={}x{} out={}x{}: "
+                     "taken as the scaled upscale pass",
+                     native_key, pipeline->ShaderHash(), in.size.width, in.size.height,
+                     out.size.width, out.size.height);
+        }
     }
     // lichii-arc (LICHII_DIAG=1): a dispatch that reads one shared-exponent colour image and writes
     // one B10G11R11 image looks like the game's upscale; log unknown ones once, with their key.
