@@ -81,6 +81,14 @@ if not defined LICHII_OOT_CPU_ACC set "LICHII_OOT_CPU_ACC=auto"
 set "PRUEBA_CPU=0"
 if /i "%LICHII_OOT_CPU_ACC%"=="unsafe" set "PRUEBA_CPU=2"
 powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^cpu_accuracy\\default=.*','cpu_accuracy\default=false' -replace '^cpu_accuracy=.*','cpu_accuracy=%PRUEBA_CPU%' | Set-Content $f"
+REM 18) (24/11) RESOLUCION INTERNA DEL EMULADOR: LICHII_OOT_RES = 1x (normal) | 075 (todo a 0,75x: tambien el
+REM      pase de 1920x1080 de 32 dibujos del final del juego, ~8 ms de GPU, y la salida de FSR 4). Vuelve sola a 1x.
+if not defined LICHII_OOT_RES set "LICHII_OOT_RES=1x"
+set "PRUEBA_RES=3"
+set "PRUEBA_RES_DEF=true"
+if /i "%LICHII_OOT_RES%"=="075" set "PRUEBA_RES=2"
+if /i "%LICHII_OOT_RES%"=="075" set "PRUEBA_RES_DEF=false"
+powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^resolution_setup\\default=.*','resolution_setup\default=%PRUEBA_RES_DEF%' -replace '^resolution_setup=.*','resolution_setup=%PRUEBA_RES%' | Set-Content $f"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)
