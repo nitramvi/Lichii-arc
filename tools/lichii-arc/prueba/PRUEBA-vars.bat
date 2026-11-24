@@ -58,6 +58,21 @@ REM      fsr4   = AMD FSR 4.1 por fsr4-vk (version comunitaria para Vulkan; expe
 REM               si no arranca vuelve solo a FSR 3.1). PRUEBA.bat baja fsr4-vk.dll a user\fidelityfx.
 set "LICHII_OOT_UPSCALER=fsr4"
 set "LICHII_FSR4_PORT=0"
+REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
+REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
+REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)
+REM      consola = el escalado propio del juego, como la Switch 2 (FSR 1 + SMAA)
+REM      dibujo  = XeSS a 960x540 -> 1080p (el mas rapido, se ve "dibujado")
+REM      Vacio (set "LICHII_OOT_PRESET=") = usa LICHII_OOT_UPSCALER y LICHII_OOT_RENDER_SCALE sueltos.
+set "LICHII_OOT_PRESET=rapido"
+if /i "%LICHII_OOT_PRESET%"=="calidad" set "LICHII_OOT_UPSCALER=fsr4"
+if /i "%LICHII_OOT_PRESET%"=="calidad" set "LICHII_OOT_RENDER_SCALE=performance"
+if /i "%LICHII_OOT_PRESET%"=="rapido" set "LICHII_OOT_UPSCALER=fsr4"
+if /i "%LICHII_OOT_PRESET%"=="rapido" set "LICHII_OOT_RENDER_SCALE=ultra"
+if /i "%LICHII_OOT_PRESET%"=="consola" set "LICHII_OOT_UPSCALER=native"
+if /i "%LICHII_OOT_PRESET%"=="consola" set "LICHII_OOT_RENDER_SCALE=performance"
+if /i "%LICHII_OOT_PRESET%"=="dibujo" set "LICHII_OOT_UPSCALER=xess"
+if /i "%LICHII_OOT_PRESET%"=="dibujo" set "LICHII_OOT_RENDER_SCALE=ultra"
 if /i "%LICHII_OOT_UPSCALER%"=="native" set "EDEN_NX2_DLSS_REPLACEMENT=native"
 if /i "%LICHII_OOT_UPSCALER%"=="fsr3" set "EDEN_NX2_DLSS_REPLACEMENT=fsr"
 if /i "%LICHII_OOT_UPSCALER%"=="xess" set "EDEN_NX2_DLSS_REPLACEMENT=xess"
