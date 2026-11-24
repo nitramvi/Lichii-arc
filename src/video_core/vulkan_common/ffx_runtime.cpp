@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
 #include <mutex>
 #include <system_error>
 
@@ -28,6 +29,18 @@ namespace Vulkan::FfxRuntime {
 
 std::filesystem::path Folder() {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::FidelityFxDir);
+}
+
+bool WindowsPortRequested() {
+#ifdef _WIN32
+    static const bool requested = [] {
+        const char* value = std::getenv("LICHII_FSR4_PORT");
+        return value && value[0] == '1';
+    }();
+    return requested;
+#else
+    return false;
+#endif
 }
 
 bool FilesPresent() {
@@ -160,6 +173,39 @@ std::shared_ptr<const Api> Acquire() {
     std::scoped_lock lock{mutex};
     if (auto existing = current.lock()) {
         return existing;
+    }
+    if (WindowsPortRequested()) {
+        const std::filesystem::path port = Folder() / WINDOWS_PORT_LIBRARY;
+        const HMODULE module = LoadLibraryExW(port.wstring().c_str(), nullptr,
+                                              LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!module) {
+            LOG_WARNING(Render_Vulkan, "FSR 4: {} doesn't load (error {}); using FSR 3.1",
+                        Common::FS::PathToUTF8String(port), GetLastError());
+            return nullptr;
+        }
+        auto loaded = std::make_unique<Loaded>();
+        loaded->module = module;
+        loaded->create_context =
+            reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(module, "ffxCreateContext"));
+        loaded->destroy_context =
+            reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(module, "ffxDestroyContext"));
+        loaded->query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(module, "ffxQuery"));
+        loaded->dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(module, "ffxDispatch"));
+        if (!loaded->create_context || !loaded->destroy_context || !loaded->query ||
+            !loaded->dispatch) {
+            LOG_WARNING(Render_Vulkan, "FSR 4: {} lacks the FFX API exports; using FSR 3.1",
+                        Common::FS::PathToUTF8String(port));
+            FreeLibrary(module);
+            return nullptr;
+        }
+        LOG_INFO(Render_Vulkan, "FSR 4: loaded the fsr4-vk community Vulkan port from {}",
+                 Common::FS::PathToUTF8String(port));
+        std::shared_ptr<const Loaded> shared{loaded.release(), [](const Loaded* l) {
+                                                 FreeLibrary(l->module);
+                                                 delete l;
+                                             }};
+        current = shared;
+        return shared;
     }
     if (!FilesVerified()) {
         return nullptr;

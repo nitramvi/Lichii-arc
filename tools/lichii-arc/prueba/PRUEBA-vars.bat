@@ -45,7 +45,16 @@ REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del ba
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.
 powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^frame_gen\\default=.*','frame_gen\default=false' -replace '^frame_gen=.*','frame_gen=true' -replace '^frame_gen_type\\default=.*','frame_gen_type\default=false' -replace '^frame_gen_type=.*','frame_gen_type=0' -replace '^frame_gen_multiplier\\default=.*','frame_gen_multiplier\default=false' -replace '^frame_gen_multiplier=.*','frame_gen_multiplier=2' | Set-Content $f"
-REM 12) (23/11 22:15) FSR 3.1 en vez de XeSS, a 1440x810 (la escala del bat principal) con LSFG x2.
-REM    XeSS se veia "dibujado"; el escalado del juego (native, a 0.667) se veia real pero daba
-REM    15-21 fps. FSR deberia quedar entre los dos. Para volver: xess o native.
-set "EDEN_NX2_DLSS_REPLACEMENT=fsr"
+REM 12) ESCALADOR DE OoT (elegible). Cambia solo esta palabra:
+REM      native = el del juego (como la Switch 2: FSR 1 + SMAA; real pero pesado)
+REM      fsr3   = AMD FSR 3.1
+REM      xess   = Intel XeSS (rapido, se ve "dibujado")
+REM      fsr4   = AMD FSR 4.1 por fsr4-vk (version comunitaria para Vulkan; experimental en Intel,
+REM               si no arranca vuelve solo a FSR 3.1). PRUEBA.bat baja fsr4-vk.dll a user\fidelityfx.
+set "LICHII_OOT_UPSCALER=fsr4"
+set "LICHII_FSR4_PORT=0"
+if /i "%LICHII_OOT_UPSCALER%"=="native" set "EDEN_NX2_DLSS_REPLACEMENT=native"
+if /i "%LICHII_OOT_UPSCALER%"=="fsr3" set "EDEN_NX2_DLSS_REPLACEMENT=fsr"
+if /i "%LICHII_OOT_UPSCALER%"=="xess" set "EDEN_NX2_DLSS_REPLACEMENT=xess"
+if /i "%LICHII_OOT_UPSCALER%"=="fsr4" set "EDEN_NX2_DLSS_REPLACEMENT=fsr"
+if /i "%LICHII_OOT_UPSCALER%"=="fsr4" set "LICHII_FSR4_PORT=1"

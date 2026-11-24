@@ -117,11 +117,18 @@ constexpr bool IsFsr4PortGpu(u32 vendor_id, u32 device_id, bool radv, bool mixed
            (mixed_dot4_accelerated || IsAmdRdna2DeviceId(device_id));
 }
 
+/// lichii-arc: the feature checks of CheckFsr4Port on any GPU (LICHII_FSR4_PORT=1 on Windows).
+constexpr Fsr4PortSupport CheckFsr4PortFeatures(const Fsr4PortDevice& device);
+
 constexpr Fsr4PortSupport CheckFsr4Port(const Fsr4PortDevice& device) {
     if (!IsFsr4PortGpu(device.vendor_id, device.device_id, device.radv,
                        device.mixed_dot4_accelerated)) {
         return {std::nullopt, "needs an RDNA 2 or newer Radeon on Mesa's RADV driver"};
     }
+    return CheckFsr4PortFeatures(device);
+}
+
+constexpr Fsr4PortSupport CheckFsr4PortFeatures(const Fsr4PortDevice& device) {
     if (!device.descriptor_buffer) {
         return {std::nullopt, "no VK_EXT_descriptor_buffer with buffer device addresses"};
     }

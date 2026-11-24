@@ -43,6 +43,7 @@
 #include "video_core/vulkan_common/xess_runtime.h"
 #include "video_core/vulkan_common/vulkan_address_map.h"
 #include "video_core/vulkan_common/vulkan_device.h"
+#include "video_core/vulkan_common/ffx_files.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/shader_cache_v2/cache.h"
@@ -860,6 +861,9 @@ namespace {
 /// the emulator's shaders use neither for it.
 bool WantsAmdFsr4(VkDriverId driver_id) {
 #ifdef _WIN32
+    if (FfxRuntime::WindowsPortRequested()) {
+        return true;
+    }
     return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY && Settings::values.amd_fsr4.GetValue();
 #elif defined(__linux__) && !defined(__ANDROID__)
     return driver_id == VK_DRIVER_ID_MESA_RADV && Settings::values.amd_fsr4.GetValue();
@@ -872,6 +876,8 @@ bool WantsAmdFsr4(VkDriverId driver_id) {
 bool WantsFsr4Port(VkDriverId driver_id) {
 #if defined(__linux__) && !defined(__ANDROID__)
     return WantsAmdFsr4(driver_id);
+#elif defined(_WIN32)
+    return FfxRuntime::WindowsPortRequested();
 #else
     return false;
 #endif

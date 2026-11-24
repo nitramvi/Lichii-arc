@@ -1,0 +1,81 @@
+# lichii-arc: builds fsr4-vk (https://github.com/Astyyyyy/fsr4-vk, GPL-3.0), the community Vulkan
+# port of FSR 4.1.1, as a Windows DLL for the Claw (LICHII_OOT_UPSCALER=fsr4 / LICHII_FSR4_PORT=1)
+# and attaches it to the prueba-claw pre-release as fsr4-vk.dll. Its models and shaders come from
+# AMD's signed amd_fidelityfx_upscaler_dx12.dll of FidelityFX SDK 2.3.0, checked by fsr4-vk's
+# own setup against its pinned sha256.
+name: fsr4-vk
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [prueba]
+    paths:
+      - .github/workflows/fsr4-vk.yml
+
+permissions:
+  contents: write
+
+env:
+  FSR4_VK_COMMIT: b0125ea9798633750f83ebabbc00279bcb49d8dd
+  AMD_SDK_DLL: https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.3.0/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll
+  AMD_SDK_DLL_SHA256: d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 llvm cmake ninja-build python3-pip
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          python3 -m pip install --break-system-packages zstandard
+          command -v llvm-objdump || sudo ln -s "$(ls /usr/bin/llvm-objdump-* | sort -V | tail -1)" /usr/local/bin/llvm-objdump
+
+      - name: Source
+        run: |
+          git init fsr4-vk
+          cd fsr4-vk
+          git remote add origin https://github.com/Astyyyyy/fsr4-vk
+          git fetch --depth 1 origin "$FSR4_VK_COMMIT"
+          git checkout FETCH_HEAD
+          git submodule update --init --recursive --depth 1 || git submodule update --init --recursive
+
+      - name: AMD SDK DLL
+        run: |
+          curl -fsSL -o amd_fidelityfx_upscaler_dx12.dll "$AMD_SDK_DLL"
+          echo "$AMD_SDK_DLL_SHA256  amd_fidelityfx_upscaler_dx12.dll" | sha256sum -c -
+
+      - name: Assets
+        working-directory: fsr4-vk
+        run: python3 tools/setup.py --dll ../amd_fidelityfx_upscaler_dx12.dll
+
+      - name: Build
+        working-directory: fsr4-vk
+        run: FSR4_BUILD_JOBS=4 bash tools/build/windows.sh
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          dll=fsr4-vk/build/windows/amd_fidelityfx_upscaler_vk.dll
+          test -f "$dll"
+          mkdir out
+          cp "$dll" out/fsr4-vk.dll
+          (cd out && sha256sum fsr4-vk.dll > fsr4-vk.dll.sha256)
+          ls -l out
+          cat out/fsr4-vk.dll.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fsr4-vk
+          path: out/
+
+      - name: Attach to prueba-claw
+        if: github.ref_name == 'prueba'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view prueba-claw --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload prueba-claw out/fsr4-vk.dll out/fsr4-vk.dll.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+          fi

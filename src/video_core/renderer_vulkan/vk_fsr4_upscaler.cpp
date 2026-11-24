@@ -204,6 +204,21 @@ bool Fsr4Upscaler::IsWanted(const Device& device) {
     }
     return support.model.has_value();
 #else
+#ifdef _WIN32
+    if (FfxRuntime::WindowsPortRequested()) {
+        const VideoCommon::Fsr4PortSupport support =
+            VideoCommon::CheckFsr4PortFeatures(device.Fsr4PortDevice());
+        if (!support.model) {
+            LOG_INFO(Render_Vulkan, "FSR 4 (fsr4-vk, LICHII_FSR4_PORT) can't run on {} ({}): {}; "
+                     "using FSR 3.1",
+                     device.GetModelName(), device.GetDriverName(), support.reason);
+        } else {
+            LOG_INFO(Render_Vulkan, "FSR 4 (fsr4-vk, LICHII_FSR4_PORT) on {}: {}",
+                     device.GetModelName(), support.reason);
+        }
+        return support.model.has_value();
+    }
+#endif
     return Settings::values.amd_fsr4.GetValue() &&
            device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY;
 #endif

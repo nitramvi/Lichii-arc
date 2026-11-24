@@ -58,6 +58,16 @@ inline constexpr std::array FILES{
 /// Whether a file has the pinned SHA-256. Always false outside Windows.
 [[nodiscard]] bool HasSha256(const std::filesystem::path& path, std::string_view sha256);
 
+#ifdef _WIN32
+/// lichii-arc (LICHII_FSR4_PORT=1): fsr4-vk (github.com/Astyyyyy/fsr4-vk) built for Windows, in
+/// Folder(), used in place of AMD's runtime on any GPU with the features it needs (Intel Arc).
+inline constexpr std::string_view WINDOWS_PORT_LIBRARY = "fsr4-vk.dll";
+#endif
+
+/// lichii-arc: whether LICHII_FSR4_PORT=1 asks for the fsr4-vk port on Windows. Always false
+/// elsewhere (Linux uses the port through the FSR 4 setting).
+[[nodiscard]] bool WindowsPortRequested();
+
 #if defined(__linux__) && !defined(__ANDROID__)
 /// fsr4-vk (github.com/Astyyyyy/fsr4-vk), the community Vulkan port of FSR 4 the Linux packages
 /// ship.
