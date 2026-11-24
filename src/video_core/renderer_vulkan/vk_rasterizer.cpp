@@ -1658,6 +1658,8 @@ void RasterizerVulkan::NoteOcarinaDraw(const GraphicsPipeline& pipeline) {
                 scene.size.height == oot_motion.extent.height && !scene.IsRescaled() &&
                 scene.range == VideoCommon::SubresourceRange{}) {
                 oot_effects_scene = scene.Handle(Shader::TextureType::Color2D);
+                oot_effects_view = scene_id;
+                oot_effects_generation = texture_cache.ImageViewGeneration(scene_id);
                 oot_effects_address = scene.gpu_addr;
                 oot_effects_frame = render_trace_frame;
                 oot_live_dlss->SaveEffectsBase(oot_effects_scene, oot_motion.extent,
@@ -3534,7 +3536,7 @@ void RasterizerVulkan::PlayUnlentDispatch(UnlentDispatch& dispatch) {
         if (std::ranges::any_of(pipeline->WrittenImages(), [this](VideoCommon::ImageViewId id) {
                 return id && texture_cache.GetImageView(id).gpu_addr == oot_effects_address;
             })) {
-            oot_live_dlss->MarkEffects(oot_effects_scene, render_trace_frame);
+            MarkOcarinaEffectsIfAlive();
             oot_effects_frame.reset();
         }
     }
@@ -3832,7 +3834,7 @@ void RasterizerVulkan::DispatchCompute() {
         if (std::ranges::any_of(written, [this](VideoCommon::ImageViewId id) {
                 return id && texture_cache.GetImageView(id).gpu_addr == oot_effects_address;
             })) {
-            oot_live_dlss->MarkEffects(oot_effects_scene, render_trace_frame);
+            MarkOcarinaEffectsIfAlive();
             oot_effects_frame.reset();
         }
     }
@@ -7438,6 +7440,21 @@ void RasterizerVulkan::ReleaseChannel(s32 channel_id) {
     }
     pipeline_cache.EraseChannel(channel_id);
     query_cache.EraseChannel(channel_id);
+}
+
+void RasterizerVulkan::MarkOcarinaEffectsIfAlive() {
+    // oot_effects_scene is a raw view handle taken at the fog draw. A scene image deleted since
+    // (unmap, join, relocation) and made again at the same address passes the address test, but
+    // the saved view is destroyed once the GPU passes the delete: after a submit in between, the
+    // mark would sample freed memory. Port of conongnang/Lichii 6c003b9ce (Fritchii bbcfe6f90d).
+    if (texture_cache.ImageViewGeneration(oot_effects_view) == oot_effects_generation) {
+        oot_live_dlss->MarkEffects(oot_effects_scene, render_trace_frame);
+    } else if (oot_effects_stale++ < 8) {
+        LOG_WARNING(Render_Vulkan,
+                    "OoT effects mark skipped, the scene view at {:#x} was destroyed since the fog "
+                    "draw ({} so far)",
+                    oot_effects_address, oot_effects_stale);
+    }
 }
 
 } // namespace Vulkan

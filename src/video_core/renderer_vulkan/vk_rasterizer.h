@@ -302,6 +302,7 @@ private:
     }
     /// What a draw leaves for Ocarina of Time's upscalers once recorded.
     void NoteOcarinaDraw(const GraphicsPipeline& pipeline);
+    void MarkOcarinaEffectsIfAlive();
 
     void FlushWork(bool ends_pass = false);
 
@@ -469,6 +470,10 @@ private:
     std::optional<u64> oot_effects_frame;
     GPUVAddr oot_effects_address{};
     VkImageView oot_effects_scene{};
+    /// oot_effects_scene's view and its generation when taken.
+    VideoCommon::ImageViewId oot_effects_view{};
+    u32 oot_effects_generation{};
+    u32 oot_effects_stale{}; ///< marks skipped: that view was destroyed in between
     struct OcarinaActorPose {
         u64 frame{};
         const Tegra::MemoryManager* channel{};
