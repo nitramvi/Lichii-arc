@@ -372,7 +372,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory, bool at_critical) 
     bool async_downloads = download_overlaps && AsyncOverlapDownloadsEnabled();
     KeepRanges keep;
     WritebackRanges::TickedRanges keep_ticks;
-    const bool no_gpu_wait_evict = LichiiNoGpuWaitEvict();
+    const bool no_gpu_wait_evict = LichiiThrash::LichiiNoGpuWaitEvict();
     const auto CanEvict = [this, &high_priority_mode, &aggressive_mode, &evict_old_costly,
                            &evict_bad_overlaps, no_gpu_wait_evict,
                            out_of_memory](ImageId image_id, bool* out_must_download = nullptr) {
