@@ -64,7 +64,8 @@ REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja re
 REM      consola = el escalado propio del juego, como la Switch 2 (FSR 1 + SMAA)
 REM      dibujo  = XeSS a 960x540 -> 1080p (el mas rapido, se ve "dibujado")
 REM      Vacio (set "LICHII_OOT_PRESET=") = usa LICHII_OOT_UPSCALER y LICHII_OOT_RENDER_SCALE sueltos.
-set "LICHII_OOT_PRESET=rapido"
+REM      Los bats PRUEBA-calidad/rapido/consola/dibujo.bat ya traen el suyo; esta linea es para PRUEBA.bat.
+if not defined LICHII_OOT_PRESET set "LICHII_OOT_PRESET=rapido"
 if /i "%LICHII_OOT_PRESET%"=="calidad" set "LICHII_OOT_UPSCALER=fsr4"
 if /i "%LICHII_OOT_PRESET%"=="calidad" set "LICHII_OOT_RENDER_SCALE=performance"
 if /i "%LICHII_OOT_PRESET%"=="rapido" set "LICHII_OOT_UPSCALER=fsr4"
