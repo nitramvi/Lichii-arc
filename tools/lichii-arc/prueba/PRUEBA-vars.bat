@@ -25,8 +25,8 @@ REM    escala para que XeSS lo reemplace (antes quedaba el escalado del juego, f
 REM    En el log tiene que aparecer "LICHII_UPSCALE_LEARNED" y despues "XeSS evaluated".
 REM    SI SE VE PEOR O MAS LENTO: cambiar 0.667 por performance (la escala del bat principal).
 REM    (23/11 13:30) AUTO_PASS en 0: Pedro prefiere el escalado del juego (ver 12).
-set "LICHII_OOT_RENDER_SCALE=0.667"
-set "LICHII_OOT_ALLOW_PADDING=1"
+set "LICHII_OOT_RENDER_SCALE=performance"
+set "LICHII_OOT_ALLOW_PADDING=0"
 set "LICHII_OOT_AUTO_PASS=0"
 REM 12) (23/11 tarde) LICHII_IMAGE_REAPER=1: las texturas que se borran se destruyen en un hilo
 REM    aparte y no en el hilo de la GPU (de conongnang/Longshot: menos tirones al girar la camara y
@@ -45,6 +45,7 @@ REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del ba
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.
 powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^frame_gen\\default=.*','frame_gen\default=false' -replace '^frame_gen=.*','frame_gen=true' -replace '^frame_gen_type\\default=.*','frame_gen_type\default=false' -replace '^frame_gen_type=.*','frame_gen_type=0' -replace '^frame_gen_multiplier\\default=.*','frame_gen_multiplier\default=false' -replace '^frame_gen_multiplier=.*','frame_gen_multiplier=2' | Set-Content $f"
-REM 12) (23/11) Escalado propio del juego en vez de XeSS: a Pedro le gusta mas como se ve (XeSS
-REM    queda "dibujado", menos realista). Con 0.667 (~720p) y LSFG x2.
-set "EDEN_NX2_DLSS_REPLACEMENT=native"
+REM 12) (23/11 22:15) FSR 3.1 en vez de XeSS, a 1440x810 (la escala del bat principal) con LSFG x2.
+REM    XeSS se veia "dibujado"; el escalado del juego (native, a 0.667) se veia real pero daba
+REM    15-21 fps. FSR deberia quedar entre los dos. Para volver: xess o native.
+set "EDEN_NX2_DLSS_REPLACEMENT=fsr"
