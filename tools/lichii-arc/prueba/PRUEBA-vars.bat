@@ -75,6 +75,12 @@ if not defined LICHII_OOT_GPU_ACC set "LICHII_OOT_GPU_ACC=alta"
 set "PRUEBA_ACC=1"
 if /i "%LICHII_OOT_GPU_ACC%"=="normal" set "PRUEBA_ACC=0"
 powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^gpu_accuracy\\default=.*','gpu_accuracy\default=false' -replace '^gpu_accuracy=.*','gpu_accuracy=%PRUEBA_ACC%' | Set-Content $f"
+REM 17) (24/11) PRECISION DE CPU: LICHII_OOT_CPU_ACC = auto (la de siempre) | unsafe (el traductor de CPU
+REM      se salta mas chequeos; mas rapido, puede haber errores de calculo raros). Se vuelve a "auto" sola.
+if not defined LICHII_OOT_CPU_ACC set "LICHII_OOT_CPU_ACC=auto"
+set "PRUEBA_CPU=0"
+if /i "%LICHII_OOT_CPU_ACC%"=="unsafe" set "PRUEBA_CPU=2"
+powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^cpu_accuracy\\default=.*','cpu_accuracy\default=false' -replace '^cpu_accuracy=.*','cpu_accuracy=%PRUEBA_CPU%' | Set-Content $f"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)
