@@ -275,7 +275,16 @@ bool Fsr4Upscaler::CreateContext(VkExtent2D render_size, VkExtent2D upscale_size
     create.maxUpscaleSize = {upscale_size.width, upscale_size.height};
     create.fpMessage = Message;
     ffxContext ctx{};
-    const ffxReturnCode_t result = api->create_context(&ctx, &create.header, nullptr);
+    ffxReturnCode_t result = api->create_context(&ctx, &create.header, nullptr);
+    if (result == FFX_API_RETURN_ERROR_PARAMETER) {
+        // fsr4-vk loaded straight (the Windows port, without AMD's loader in front) only knows
+        // the older Vulkan backend tag (3) of FidelityFX API 1.x; same struct layout.
+        backend.header.type = 3u;
+        result = api->create_context(&ctx, &create.header, nullptr);
+        if (result == FFX_API_RETURN_OK) {
+            LOG_INFO(Render_Vulkan, "FSR 4: context created with the legacy Vulkan backend tag");
+        }
+    }
     if (result != FFX_API_RETURN_OK) {
         LOG_ERROR(Render_Vulkan, "FSR 4: ffxCreateContext {}x{} -> {}x{} failed ({}); using FSR 3.1",
                   render_size.width, render_size.height, upscale_size.width, upscale_size.height,
