@@ -46,20 +46,6 @@ for /f "usebackq tokens=* delims=" %%L in (`findstr /r /i /c:"^[ 	]*set[ 	][ 	]*
 )
 
 :nuevas
-REM --- FSR 4 (fsr4-vk): se baja a user\fidelityfx la primera vez y cuando cambia ---
-set "PRUEBA_FSR4_DIR=%~dp0user\fidelityfx"
-if not exist "%PRUEBA_FSR4_DIR%" mkdir "%PRUEBA_FSR4_DIR%"
-set "PRUEBA_FSR4_TIENE="
-set "PRUEBA_FSR4_HAY="
-if exist "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256" set /p PRUEBA_FSR4_TIENE=<"%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256"
-if not exist "%PRUEBA_FSR4_DIR%\fsr4-vk.dll" set "PRUEBA_FSR4_TIENE="
-curl.exe -s -L --fail -o "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256.tmp" "%PRUEBA_URL%/fsr4-vk.dll.sha256" && set /p PRUEBA_FSR4_HAY=<"%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256.tmp"
-if defined PRUEBA_FSR4_HAY if not "%PRUEBA_FSR4_TIENE%"=="%PRUEBA_FSR4_HAY%" (
-  echo Bajando FSR 4 ^(fsr4-vk^)...
-  curl.exe -L --fail -o "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.tmp" "%PRUEBA_URL%/fsr4-vk.dll" && move /y "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.tmp" "%PRUEBA_FSR4_DIR%\fsr4-vk.dll" >nul && move /y "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256.tmp" "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256" >nul
-)
-if exist "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256.tmp" del "%PRUEBA_FSR4_DIR%\fsr4-vk.dll.sha256.tmp"
-
 REM --- 2) Variables de esta prueba: estan en PRUEBA-vars.bat, que se baja junto con el exe ---
 if exist "%~dp0PRUEBA-vars.bat" call "%~dp0PRUEBA-vars.bat"
 
