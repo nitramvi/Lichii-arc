@@ -67,6 +67,14 @@ REM      fsr4   = AMD FSR 4.1 por fsr4-vk (version comunitaria para Vulkan; expe
 REM               si no arranca vuelve solo a FSR 3.1). PRUEBA.bat baja fsr4-vk.dll a user\fidelityfx.
 set "LICHII_OOT_UPSCALER=fsr4"
 set "LICHII_FSR4_PORT=0"
+REM 16) (24/11) PRECISION DE GPU para bajar CPU: LICHII_OOT_GPU_ACC = alta (la del bat principal) | normal
+REM      (menos sincronizacion CPU-GPU; puede haber algun glitch). Se escribe en qt-config.ini en cada
+REM      arranque, asi PRUEBA.bat y los otros bats vuelven solos a "alta".
+REM      El hilo de render (EDEN_NX2_RENDER_FOLLOWER=1) lo prende PRUEBA-normal-hilo.bat.
+if not defined LICHII_OOT_GPU_ACC set "LICHII_OOT_GPU_ACC=alta"
+set "PRUEBA_ACC=1"
+if /i "%LICHII_OOT_GPU_ACC%"=="normal" set "PRUEBA_ACC=0"
+powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^gpu_accuracy\\default=.*','gpu_accuracy\default=false' -replace '^gpu_accuracy=.*','gpu_accuracy=%PRUEBA_ACC%' | Set-Content $f"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)

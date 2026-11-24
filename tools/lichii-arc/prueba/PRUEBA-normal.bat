@@ -1,0 +1,5 @@
+@echo off
+REM OoT: calidad con precision de GPU Normal (prueba para bajar el uso de CPU).
+set "LICHII_OOT_PRESET=calidad"
+set "LICHII_OOT_GPU_ACC=normal"
+call "%~dp0PRUEBA.bat"
