@@ -574,6 +574,19 @@ constexpr std::array CLOCK_CARRY_RECORDS{
                        std::span{CLOCK_CARRY_PADDING}.first(CLOCK_CARRY_DONE.size())},
 };
 constexpr std::array CLOCK_CARRY_STATE{BuiltinPatchState{0x4E9D000, 136}};
+// Below 60 fps (steps over 1) the carry above cuts 2 * step to whole seconds, so at 46 fps the day
+// ran at 77 % of real time. This variant carries amounts up to 12.0 (FPS Unlock's 6.0 step cap):
+// mov w14, #0x41400000 in the range check. A whole amount keeps a zero fraction, as at 60 fps.
+constexpr std::array<u8, 24> CLOCK_CARRY_RANGE_CHECK_ALL{
+    0x0D, 0x00, 0x26, 0x1E, 0xED, 0x0E, 0x00, 0x34, 0x0E, 0x28, 0xA8, 0x52,
+    0xBF, 0x01, 0x0E, 0x6B, 0x82, 0x0E, 0x00, 0x54, 0x13, 0x00, 0x00, 0x14,
+};
+static_assert(CLOCK_CARRY_RECORDS[2].module_offset == 0x177DC48);
+constexpr auto CLOCK_CARRY_ALL_RECORDS = [] {
+    auto records = CLOCK_CARRY_RECORDS;
+    records[2].bytes = CLOCK_CARRY_RANGE_CHECK_ALL;
+    return records;
+}();
 
 // Dark's timer state at 0 and the water slots to 0x98.
 constexpr std::array DYNAMIC_FPS_STATES{BuiltinPatchState{0x4E9FE00, 0x98}};
@@ -703,6 +716,18 @@ constexpr std::array WEB_CARRY_RECORDS{
                        std::span{WEB_CARRY_PADDING}.first(WEB_CARRY_DONE.size())},
 };
 constexpr std::array WEB_CARRY_STATE{BuiltinPatchState{0x4E9D100, 136}};
+// Below 60 fps the web's 1 to 6 steps keep their fraction too (mov w14, #0x40C00000, 6.0); longer
+// pauses still take the original cut and clamp.
+constexpr std::array<u8, 24> WEB_CARRY_RANGE_CHECK_ALL{
+    0x0D, 0x00, 0x26, 0x1E, 0xED, 0x15, 0x00, 0x34, 0x0E, 0x18, 0xA8, 0x52,
+    0xBF, 0x01, 0x0E, 0x6B, 0x82, 0x15, 0x00, 0x54, 0x13, 0x00, 0x00, 0x14,
+};
+static_assert(WEB_CARRY_RECORDS[2].module_offset == 0x177E2A8);
+constexpr auto WEB_CARRY_ALL_RECORDS = [] {
+    auto records = WEB_CARRY_RECORDS;
+    records[2].bytes = WEB_CARRY_RANGE_CHECK_ALL;
+    return records;
+}();
 
 // Keep the manager's original bit test and both targets. After the first eligible request,
 // require one guest second between requests. The hook preserves x8-x11, SP and NZCV.
@@ -801,6 +826,17 @@ constexpr std::array BUILTIN_PATCHES{
         .states = DYNAMIC_FPS_STATES,
     },
     BuiltinPatch{
+        .name = "OoT day/night clock below 60 (FPS Unlock)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = CLOCK_CARRY_ALL_RECORDS,
+        .states = CLOCK_CARRY_STATE,
+        .requires_patch = FPS_UNLOCK_NAME,
+        .enable_env = "LICHII_OOT_FRAME_CARRY",
+        .group = "OoT day/night clock",
+    },
+    BuiltinPatch{
         .name = "OoT day/night clock (FPS Unlock)",
         .title_id = 0x0400486024DEC000,
         .module = "main",
@@ -808,6 +844,7 @@ constexpr std::array BUILTIN_PATCHES{
         .records = CLOCK_CARRY_RECORDS,
         .states = CLOCK_CARRY_STATE,
         .requires_patch = FPS_UNLOCK_NAME,
+        .group = "OoT day/night clock",
     },
     // The NVIDIA DLSS quality lowers Ocarina's render resolution under Max Resolution, since DLSS
     // replaces the game's own 1440p -> 4K upscale and takes whatever the game renders.
@@ -864,6 +901,17 @@ constexpr std::array BUILTIN_PATCHES{
         .group = "Text Speed",
     },
     BuiltinPatch{
+        .name = "Deku Tree floor web below 60 (FPS Unlock)",
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = WEB_CARRY_ALL_RECORDS,
+        .states = WEB_CARRY_STATE,
+        .requires_patch = FPS_UNLOCK_NAME,
+        .enable_env = "LICHII_OOT_FRAME_CARRY",
+        .group = "Deku Tree floor web",
+    },
+    BuiltinPatch{
         .name = "Deku Tree floor web (FPS Unlock)",
         .title_id = 0x0400486024DEC000,
         .module = "main",
@@ -871,6 +919,7 @@ constexpr std::array BUILTIN_PATCHES{
         .records = WEB_CARRY_RECORDS,
         .states = WEB_CARRY_STATE,
         .requires_patch = FPS_UNLOCK_NAME,
+        .group = "Deku Tree floor web",
     },
     BuiltinPatch{
         .name = TEXTURE_COMPACTION_NAME,
