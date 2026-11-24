@@ -2,6 +2,27 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
+## Esta versión (24/11, tarde)
+
+**Objetivo: upstream al día + arreglos de OoT de conongnang/Lichii.** Sigue todo lo anterior (presets `calidad`/`rapido`/`consola`/`dibujo`, FSR 4 con reintento del backend, LSFG x2, HOT_PAGES, GUEST_FAST, image reaper, TC_NO_GPU_WAIT).
+
+Nuevo nuestro (apagado salvo en PRUEBA-vars.bat):
+- `LICHII_BOOT_DRIVER_THREADS=1`: durante "Loading Shaders" el driver compila con todos los hilos, no con la mitad (port de conongnang/Lichii f6612f5a6, de Longshot). Solo acorta la carga; en juego queda igual.
+- `LICHII_OOT_FRAME_CARRY=1`: con FPS Unlock y menos de 60 fps, el reloj del día y la telaraña del Árbol Deku guardan las fracciones de cada cuadro (antes, a 46 fps el día corría al 77 % de la velocidad real). Port de conongnang/Lichii 647d88045 (Longshot #1828). No cambia los fps.
+
+Arreglo (siempre activo, solo evita un uso de memoria liberada):
+- Con FSR 3/FSR 4 en OoT, la marca de efectos (Navi, luciérnagas, polvo) ya no usa una vista de la escena que se borró entre la niebla y la marca: se saltea ese cuadro (log "OoT effects mark skipped"). Port de conongnang/Lichii 6c003b9ce (Fritchii bbcfe6f90d). Puede evitar cuelgues/device lost con FSR.
+
+Nuevo de upstream (nx2 al 24/11 15:39 UTC):
+- #2465: el buffer cache también borra búferes sin usar hace 3600 cuadros por debajo de 512 MiB (menos RAM en juegos de Switch 2).
+- #2523: SPIR-V conserva las pseudo-operaciones de flags (arreglo de shaders), #2533 avisos HDR al juego, #2259 (JIT), #2491, #2524, #2467.
+
+Qué probar (con PRUEBA.bat o un PRUEBA-<preset>.bat, se actualizan solos):
+1. Cuánto tarda "Loading Shaders" al abrir OoT (comparar con lo de antes).
+2. OoT con `rapido` o `calidad` (FSR 4): que no haya cuelgues; si en el log aparece "OoT effects mark skipped", es el arreglo actuando.
+3. OoT con FPS Unlock: que el día y la noche pasen a ritmo normal.
+4. Otro juego, para descartar regresiones.
+
 ## Esta versión (24/11, mediodía)
 
 **Objetivo: menos esperas de texturas en OoT (y todos los juegos) + upstream al día.** Sigue todo lo anterior (escalador elegible con FSR 4, LSFG x2, HOT_PAGES, GUEST_FAST, image reaper).

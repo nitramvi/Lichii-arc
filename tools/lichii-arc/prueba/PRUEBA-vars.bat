@@ -46,6 +46,15 @@ REM    GPU (cada una obliga a esperar a la GPU para copiarla de vuelta: las espe
 REM    log) salvo pasando el umbral critico de memoria; primero borra las que se tiran sin copiar.
 REM    Port de conongnang/Lichii (d7b86404f2). 0 = como antes. Si sube mucho la RAM: ponerlo en 0.
 set "LICHII_TC_NO_GPU_WAIT=1"
+REM 16) (24/11 tarde) LICHII_BOOT_DRIVER_THREADS=1: en "Loading Shaders" el driver compila con todos
+REM    los hilos (antes la mitad) hasta que arranca el juego; despues vuelve a lo de siempre. Solo
+REM    acorta la carga de shaders (de conongnang/Lichii f6612f5a6). 0 = como antes.
+set "LICHII_BOOT_DRIVER_THREADS=1"
+REM 17) (24/11 tarde) LICHII_OOT_FRAME_CARRY=1: con FPS Unlock y menos de 60 fps, el reloj del dia y
+REM    la telarana del Arbol Deku ya no pierden las fracciones de cada cuadro (a 46 fps el dia iba al
+REM    77 %% de la velocidad real; a 23-27 fps tambien se atrasa). De conongnang/Lichii 647d88045
+REM    (Longshot). No cambia fps. 0 = como antes.
+set "LICHII_OOT_FRAME_CARRY=1"
 REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del bat de 60 fps): el
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.
