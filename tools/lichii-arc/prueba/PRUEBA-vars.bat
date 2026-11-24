@@ -41,6 +41,11 @@ REM    esperas "buffer" del log). Los dos de conongnang/Lichii y Fritchii. 0 = c
 REM    SI APARECEN TEXTURAS O GEOMETRIA ROTA: poner los dos en 0.
 set "LICHII_HOT_PAGES=1"
 set "LICHII_GUEST_FAST=1"
+REM 14) (24/11) LICHII_TC_NO_GPU_WAIT=1: el recolector de texturas ya no borra imagenes que dibujo la
+REM    GPU (cada una obliga a esperar a la GPU para copiarla de vuelta: las esperas "texture" del
+REM    log) salvo pasando el umbral critico de memoria; primero borra las que se tiran sin copiar.
+REM    Port de conongnang/Lichii (d7b86404f2). 0 = como antes. Si sube mucho la RAM: ponerlo en 0.
+set "LICHII_TC_NO_GPU_WAIT=1"
 REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del bat de 60 fps): el
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.

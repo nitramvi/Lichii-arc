@@ -2,7 +2,24 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
-## Esta versión (23/11, noche)
+## Esta versión (24/11, mediodía)
+
+**Objetivo: menos esperas de texturas en OoT (y todos los juegos) + upstream al día.** Sigue todo lo anterior (escalador elegible con FSR 4, LSFG x2, HOT_PAGES, GUEST_FAST, image reaper).
+
+Nuevo nuestro (apagado salvo en PRUEBA-vars.bat):
+- `LICHII_TC_NO_GPU_WAIT=1`: port de conongnang/Lichii d7b86404f2 (vía 604697d0b1). El recolector de texturas, al pasar el umbral "esperado" de memoria, borraba también imágenes que dibujó la GPU, y cada una obliga a esperar a la GPU para copiarla de vuelta (en OoT, girar la cámara borró 304 de 408 imágenes con 40 esperas). Ahora esas solo se borran pasando el umbral crítico o si falta memoria, y dentro de cada pasada van al final. Apunta a las esperas `texture` del log (~280 ms cada 10 s el 22/11). Puede usar algo más de RAM de video.
+
+Nuevo de upstream (nx2 al 24/11 06:34 UTC, para todos los juegos):
+- #2517: los búferes origen de copias sparse se mantienen hasta que la GPU termina (arreglo de corrupción).
+- #2502: parar un juego ya no dispara el apagado varias veces.
+- #2512 (log de Z24 emulado), #2478, #2418 (LDN), tests y CMake.
+
+Qué probar (con PRUEBA.bat, se actualiza solo):
+1. OoT en Kokiri y campo de Hyrule girando la cámara rápido: tirones y "game FPS"; en el log la categoría `texture` (antes ~280 ms por 10 s).
+2. Que la RAM no se dispare en sesiones largas (si pasa, `LICHII_TC_NO_GPU_WAIT=0`).
+3. Otro juego cualquiera, para descartar regresiones.
+
+## Versión del 23/11, noche
 
 **Objetivo: más FPS en OoT bajando el trabajo de la CPU** (en la Claw OoT va con la CPU al ~100 % y el log muestra ~890 ms de esperas "buffer" cada 10 s). Sigue todo lo de la versión de la tarde (0.667 + XeSS, image reaper, LSFG x2) y upstream al día (nx2 al 23/11 15:45 UTC: #2495 dumps de cuadros, #2498 capturas PNG en el Álbum).
 

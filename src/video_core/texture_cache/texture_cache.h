@@ -170,6 +170,17 @@ namespace LichiiThrash {
     return mode;
 }
 
+/// LICHII_TC_NO_GPU_WAIT=1 (port of conongnang/Lichii d7b86404f2 via 604697d0b1): images the GPU
+/// wrote are evicted (a GPU wait to copy each back) only past the critical threshold or when an
+/// allocation failed, and after the images that can simply be dropped. 0 = off (default).
+[[nodiscard]] inline bool LichiiNoGpuWaitEvict() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_TC_NO_GPU_WAIT");
+        return value != nullptr && std::atoi(value) != 0;
+    }();
+    return enabled;
+}
+
 [[nodiscard]] inline u64 LichiiThrashShape(const ImageInfo& info) {
     return (u64{info.size.width} << 40) ^ (u64{info.size.height} << 20) ^ u64{info.size.depth} ^
            (u64{static_cast<u32>(info.format)} << 56) ^ (u64{info.resources.layers} << 8) ^
@@ -361,9 +372,10 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory, bool at_critical) 
     bool async_downloads = download_overlaps && AsyncOverlapDownloadsEnabled();
     KeepRanges keep;
     WritebackRanges::TickedRanges keep_ticks;
+    const bool no_gpu_wait_evict = LichiiNoGpuWaitEvict();
     const auto CanEvict = [this, &high_priority_mode, &aggressive_mode, &evict_old_costly,
-                           &evict_bad_overlaps](ImageId image_id,
-                                                bool* out_must_download = nullptr) {
+                           &evict_bad_overlaps, no_gpu_wait_evict,
+                           out_of_memory](ImageId image_id, bool* out_must_download = nullptr) {
         const auto& image = slot_images[image_id];
         if (True(image.flags & ImageFlagBits::IsDecoding) ||
             (evict_bad_overlaps && False(image.flags & ImageFlagBits::BadOverlap))) {
@@ -376,7 +388,8 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory, bool at_critical) 
         }
         if ((!aggressive_mode && !evict_old_costly &&
              True(image.flags & ImageFlagBits::CostlyLoad)) ||
-            (!high_priority_mode && must_download)) {
+            (!high_priority_mode && must_download) ||
+            (no_gpu_wait_evict && must_download && !aggressive_mode && !out_of_memory)) {
             return false;
         }
         return true;
@@ -555,6 +568,15 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory, bool at_critical) 
                     fill = it != block_image_bytes.end()
                                ? static_cast<double>(it->second) / static_cast<double>(block.block_size)
                                : 0.0;
+                }
+                // LICHII_TC_NO_GPU_WAIT: images copied back first (a GPU wait each) go after
+                // those simply dropped.
+                if (no_gpu_wait_evict) {
+                    const auto& ordered_image = slot_images[image_id];
+                    if (IsDownloadable(ordered_image) &&
+                        False(ordered_image.flags & ImageFlagBits::BadOverlap)) {
+                        fill += 2.0;
+                    }
                 }
                 ordered.emplace_back(fill, image_id);
             }
