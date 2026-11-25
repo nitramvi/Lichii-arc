@@ -100,7 +100,9 @@ powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f)
 REM 20) (25/11) CACHE DE TEXTURAS ASTC EN DISCO: la Arc 140V no tiene ASTC y convierte cada textura nueva
 REM      en la GPU. Al entrar a una zona/escena nueva (25/11: 240 texturas, congelon de varios segundos)
 REM      se guardan ya convertidas; la proxima vez se copian del disco. Hasta 2 GB en user\.
-set "LICHII_ASTC_DISK_CACHE=1"
+REM      APAGADA el 25/11: en la Claw leer del disco tardo ~30 ms por textura (5 s cada 10 s) contra
+REM      ~2 ms de convertirla en la GPU: muchos mas tirones. No volver a prender sin arreglar la lectura.
+set "LICHII_ASTC_DISK_CACHE=0"
 REM 21) (25/11) DIAGNOSTICO: copias de buferes de la GPU por origen, cada 10 s en el log (LICHII_BUF_COPIES).
 set "LICHII_BUF_COPY_STATS=1"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
