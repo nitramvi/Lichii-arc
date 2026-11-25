@@ -5809,9 +5809,33 @@ bool RasterizerVulkan::TryOcarinaUpscale(const ComputePipeline& pipeline, u64 na
         if (oot_jitter_frame == render_trace_frame) {
             jitter = oot_jitter_offset;
         }
-        const VkExtent2D output_extent = native_resolution ? extent
-                                         : upscale_4k      ? VkExtent2D{3840, 2160}
-                                                           : target_extent;
+        VkExtent2D output_extent = native_resolution ? extent
+                                   : upscale_4k      ? VkExtent2D{3840, 2160}
+                                                     : target_extent;
+        // lichii-arc: LICHII_OOT_UPSCALE_OUT=<0.5..0.99> runs the temporal upscaler (FSR 4 /
+        // XeSS / FSR 3.1) to that fraction of the game's target (0.833 -> 1600x900 for a
+        // 1920x1080 target) and the writeback pass stretches it bilinearly. FSR 4 costs ~7 ms
+        // per frame on the Claw at 1080p and scales with the output pixels. Off by default.
+        static const f32 upscale_out_fraction = [] {
+            const char* value = std::getenv("LICHII_OOT_UPSCALE_OUT");
+            const f32 parsed = value ? static_cast<f32>(std::strtod(value, nullptr)) : 0.0f;
+            return parsed >= 0.5f && parsed < 1.0f ? parsed : 0.0f;
+        }();
+        if (upscale_out_fraction > 0.0f && !native_resolution && !upscale_4k) {
+            const u32 out_w = static_cast<u32>(target_extent.width * upscale_out_fraction) & ~1U;
+            const u32 out_h = static_cast<u32>(target_extent.height * upscale_out_fraction) & ~1U;
+            if (out_w > extent.width && out_h > extent.height) {
+                output_extent = VkExtent2D{out_w, out_h};
+            }
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_INFO(Render_Vulkan,
+                         "LICHII_OOT_UPSCALE_OUT={:.3f}: scene {}x{} -> upscaler {}x{} -> target {}x{}",
+                         upscale_out_fraction, extent.width, extent.height, output_extent.width,
+                         output_extent.height, target_extent.width, target_extent.height);
+            }
+        }
         const bool recorded = oot_live_dlss->Record(color_view, depth.DepthView(), target_view,
                                                    extent, output_extent, target_extent, oot_motion.current,
                                                    oot_motion.previous, mesh, depth.ImageHandle(),

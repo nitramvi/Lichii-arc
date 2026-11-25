@@ -111,6 +111,11 @@ if exist "user\log\eden_log.txt" (
   if not exist "user\log\historial" mkdir "user\log\historial"
   powershell -NoProfile -Command "$s='user\log\eden_log.txt'; $d='user\log\historial'; $t=(Get-Item $s).LastWriteTime.ToString('yyyy-MM-dd_HH-mm'); Copy-Item $s (Join-Path $d ('eden_log_'+$t+'.txt')) -Force; Get-ChildItem $d -Filter 'eden_log_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 15 | Remove-Item -Force"
 )
+REM 23) (25/11 tarde) SALIDA DEL ESCALADOR MAS CHICA: FSR 4 / XeSS / FSR 3.1 reconstruyen a esa
+REM      fraccion del destino del juego (0.833 = 1600x900 en vez de 1920x1080) y el pase de
+REM      escritura lo estira con bilineal. FSR 4 cuesta ~7 ms por cuadro a 1080p en la Claw y
+REM      baja con los pixeles de salida (~30 %% menos a 1600x900). Si se ve muy blando: 0 (apagado).
+set "LICHII_OOT_UPSCALE_OUT=0.833"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)

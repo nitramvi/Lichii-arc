@@ -2,6 +2,26 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
+## Esta versión (25/11, tarde)
+
+**Objetivo: más fps en OoT bajando el costo de FSR 4 + upstream al día.** Sigue todo lo de la madrugada (QUERY_WAIT_LAST, PRESENT_SKIP_1TO1, preset `calidad` con FSR 4, LSFG x2, etc.).
+
+Nuevo nuestro (apagado salvo en PRUEBA-vars.bat, ítem 23):
+- `LICHII_OOT_UPSCALE_OUT=0.833`: FSR 4 (o XeSS / FSR 3.1) reconstruye a 1600x900 en vez de 1920x1080 y el pase que escribe en la imagen del juego lo estira a 1080p con bilineal. En la traza del 24/11 FSR 4 costaba ~7 ms de los ~38 ms de cada cuadro y depende de la salida: a 1600x900 son ~30 % menos píxeles (~2 ms menos, 1–2 fps más). En el log: `LICHII_OOT_UPSCALE_OUT=0.833: scene ... -> upscaler 1600x900 -> target 1920x1080`. Con 0 (o borrando la línea) vuelve a como estaba.
+
+De la sesión manual de hoy (sin código nuevo de GPU): preset de OoT en la configuración de gráficos por juego, `LICHII_BUF_COPY_STATS=1` (diagnóstico de copias de búferes en el log), `LICHII_ASTC_DISK_CACHE` probado y vuelto a apagar, historial de los últimos 15 logs en `user\log\historial`.
+
+Nuevo de upstream (nx2 al 25/11 tarde):
+- #2576: el búfer de subidas mira su primera región antes de dar la vuelta (evita pisar datos que la GPU todavía lee: corrupción/parpadeos, todos los juegos).
+- #2573: generaciones de vistas de imagen reservadas antes de retirarlas (sigue al #2566 de OoT con FSR).
+- #2577 (R2P con máscara inmediata) y #2567 (phi con operandos inmediatos en SPIR-V): arreglos de shaders.
+- #2578: se revierte #2482 (bloom de MKW), #2582 notas.
+
+Qué probar (con PRUEBA.bat, se actualiza solo):
+1. OoT en Kokiri y campo de Hyrule, a batería: "game FPS" contra la versión de la madrugada.
+2. Imagen: si se nota más blanda que antes, probar `0.9` (1728x972) o `0` en el ítem 23 de PRUEBA-vars.bat.
+3. Otro juego para descartar regresiones (por #2576 y los arreglos de shaders).
+
 ## Esta versión (25/11, madrugada)
 
 **Objetivo: menos GPU por cuadro en OoT** (la traza del 24/11 mostró que en la Claw OoT está limitado por la GPU, ~38 ms por cuadro) **+ upstream al día.** Sigue todo lo anterior (preset `calidad` con FSR 4, LSFG x2, HOT_PAGES, GUEST_FAST, image reaper, TC_NO_GPU_WAIT, BOOT_DRIVER_THREADS, OOT_FRAME_CARRY).
