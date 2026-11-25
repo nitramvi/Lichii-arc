@@ -33,11 +33,9 @@ std::filesystem::path Folder() {
 
 bool WindowsPortRequested() {
 #ifdef _WIN32
-    static const bool requested = [] {
-        const char* value = std::getenv("LICHII_FSR4_PORT");
-        return value && value[0] == '1';
-    }();
-    return requested;
+    // Read each time: the OoT preset in the settings sets it when a game starts.
+    const char* value = std::getenv("LICHII_FSR4_PORT");
+    return value && value[0] == '1';
 #else
     return false;
 #endif

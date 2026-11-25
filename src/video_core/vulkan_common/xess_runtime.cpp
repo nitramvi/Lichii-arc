@@ -70,13 +70,10 @@ std::shared_ptr<const Api> Load() {
 
 bool Wanted() {
 #ifdef _WIN32
-    static const bool wanted = [] {
-        const char* replacement = std::getenv("EDEN_NX2_DLSS_REPLACEMENT");
-        const char* flag = std::getenv("LICHII_OOT_XESS");
-        return (replacement && std::string_view{replacement} == "xess") ||
-               (flag && flag[0] == '1');
-    }();
-    return wanted;
+    // Read each time: the OoT preset in the settings sets it when a game starts.
+    const char* replacement = std::getenv("EDEN_NX2_DLSS_REPLACEMENT");
+    const char* flag = std::getenv("LICHII_OOT_XESS");
+    return (replacement && std::string_view{replacement} == "xess") || (flag && flag[0] == '1');
 #else
     return false;
 #endif

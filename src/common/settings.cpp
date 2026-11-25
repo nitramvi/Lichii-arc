@@ -51,6 +51,7 @@ SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
 SWITCHABLE(NvidiaDlssQuality, false);
 SWITCHABLE(NvidiaDlssPreset, false);
+SWITCHABLE(LichiiOotPreset, false);
 SWITCHABLE(HdrMode, false);
 SWITCHABLE(HdrSwapchain, false);
 SWITCHABLE(AspectRatio, true);
@@ -144,6 +145,46 @@ std::optional<NvidiaDlssQuality> OcarinaDlssRenderScale() {
         return std::nullopt;
     }
     return quality;
+}
+
+void ApplyLichiiOotPreset() {
+    const auto preset = values.lichii_oot_preset.GetValue();
+    if (preset == LichiiOotPreset::FromLauncher) {
+        return;
+    }
+    const char* replacement = "fsr";
+    const char* fsr4 = "0";
+    const char* scale = "performance";
+    switch (preset) {
+    case LichiiOotPreset::Calidad:
+        fsr4 = "1";
+        break;
+    case LichiiOotPreset::Rapido:
+        fsr4 = "1";
+        scale = "ultra";
+        break;
+    case LichiiOotPreset::Consola:
+        replacement = "native";
+        break;
+    case LichiiOotPreset::Dibujo:
+        replacement = "xess";
+        scale = "ultra";
+        break;
+    default:
+        return;
+    }
+    const auto put = [](const char* name, const char* value) {
+#ifdef _WIN32
+        _putenv_s(name, value);
+#else
+        setenv(name, value, 1);
+#endif
+    };
+    put("EDEN_NX2_DLSS_REPLACEMENT", replacement);
+    put("LICHII_FSR4_PORT", fsr4);
+    put("LICHII_OOT_RENDER_SCALE", scale);
+    LOG_INFO(Config, "Lichii OoT preset {}: upscaler {}{}, render scale {}",
+             static_cast<u32>(preset), replacement, fsr4[0] == '1' ? " (FSR 4)" : "", scale);
 }
 
 void SetAppliedOcarinaRenderScale(std::optional<NvidiaDlssQuality> quality) {

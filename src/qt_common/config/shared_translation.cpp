@@ -248,6 +248,15 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            "L/M require DLSS 310.5 or newer; the download button provides 310.9.16. "
            "If Fire Emblem shows horizontal lines with L/M at 2x, try K. "
            "NVIDIA app overrides may supersede this choice. Apply/OK updates it while playing."));
+    INSERT(Settings, lichii_oot_preset, tr("Ocarina of Time (Lichii-arc):"),
+           tr("Escalador y resolución para The Legend of Zelda: Ocarina of Time.\n"
+              "Según el bat: usa las variables del .bat con que se abrió (no cambia nada).\n"
+              "Calidad: FSR 4 dibujando a 1440x810 (la imagen más natural).\n"
+              "Rápido: FSR 4 dibujando a 960x540.\n"
+              "Consola: el escalado propio del juego, como la Switch 2.\n"
+              "Dibujo: XeSS dibujando a 960x540.\n"
+              "FSR 4 necesita fsr4-vk.dll en user\\fidelityfx (lo baja PRUEBA.bat); si no está, "
+              "usa FSR 3.1. Se aplica al iniciar el juego."));
     INSERT(Settings, anti_aliasing, tr("Anti-Aliasing Method:"),
            tr("The anti-aliasing method to use.\nSMAA offers the best quality.\nFXAA "
               "can produce a more stable picture in lower resolutions.\nOff while HDR output "
@@ -632,6 +641,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
           PAIR(NvidiaDlssPreset, F, tr("F (legacy CNN)")),
           PAIR(NvidiaDlssPreset, J, tr("J (DLSS 4)")), PAIR(NvidiaDlssPreset, K, tr("K (DLSS 4)")),
           PAIR(NvidiaDlssPreset, L, tr("L (DLSS 4.5)"))}});
+    translations->insert({Settings::EnumMetadata<Settings::LichiiOotPreset>::Index(),
+                          {PAIR(LichiiOotPreset, FromLauncher, tr("Según el bat")),
+                           PAIR(LichiiOotPreset, Calidad, tr("Calidad (FSR 4, 1440x810)")),
+                           PAIR(LichiiOotPreset, Rapido, tr("Rápido (FSR 4, 960x540)")),
+                           PAIR(LichiiOotPreset, Consola, tr("Consola (escalado del juego)")),
+                           PAIR(LichiiOotPreset, Dibujo, tr("Dibujo (XeSS, 960x540)"))}});
     translations->insert({Settings::EnumMetadata<Settings::AstcDecodeMode>::Index(),
                           {
                               PAIR(AstcDecodeMode, Cpu, tr("CPU")),

@@ -66,6 +66,7 @@ SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
 SWITCHABLE(NvidiaDlssQuality, false);
 SWITCHABLE(NvidiaDlssPreset, false);
+SWITCHABLE(LichiiOotPreset, false);
 SWITCHABLE(HdrMode, false);
 SWITCHABLE(HdrSwapchain, false);
 SWITCHABLE(AspectRatio, true);
@@ -431,6 +432,14 @@ struct Values {
                                                              Specialization::Default,
                                                              true,
                                                              true};
+    // lichii-arc: Ocarina of Time preset (upscaler + render scale), applied when a game starts.
+    SwitchableSetting<LichiiOotPreset> lichii_oot_preset{linkage,
+                                                         LichiiOotPreset::FromLauncher,
+                                                         "lichii_oot_preset",
+                                                         Category::Renderer,
+                                                         Specialization::Default,
+                                                         true,
+                                                         true};
     SwitchableSetting<NvidiaDlssPreset> nvidia_dlss_preset{linkage,
                                                            NvidiaDlssPreset::M,
                                                            "nvidia_dlss_preset",
@@ -1200,6 +1209,8 @@ std::optional<NvidiaDlssQuality> OcarinaDlssRenderScale();
 std::optional<u32> OcarinaCustomRenderScaleWord();
 /// The quality whose render-scale patch the running game's main module got (none: unpatched).
 void SetAppliedOcarinaRenderScale(std::optional<NvidiaDlssQuality> quality);
+/// lichii-arc: turns lichii_oot_preset into the environment variables the renderer reads.
+void ApplyLichiiOotPreset();
 std::optional<NvidiaDlssQuality> AppliedOcarinaRenderScale();
 
 constexpr u32 MIN_FRAME_GEN_MULTIPLIER = 2;
