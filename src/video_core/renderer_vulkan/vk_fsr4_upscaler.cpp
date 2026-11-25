@@ -6,6 +6,8 @@
 // and records into our command buffer. Picking the FSR 4 provider by version follows
 // CheezerWheezer's FSR 4 integration for CheezyEmu.
 
+#include <chrono>
+#include <future>
 #include <optional>
 #include <string>
 #include <vector>
@@ -238,6 +240,12 @@ Fsr4Upscaler::Fsr4Upscaler(const Device& device_, Scheduler& scheduler_,
 }
 
 Fsr4Upscaler::~Fsr4Upscaler() {
+    if (pending_context.valid()) {
+        if (void* ctx = pending_context.get()) {
+            ffxContext handle = ctx;
+            api->destroy_context(&handle, nullptr);
+        }
+    }
     DestroyContext();
 }
 
@@ -253,6 +261,18 @@ void Fsr4Upscaler::DestroyContext() {
 
 bool Fsr4Upscaler::CreateContext(VkExtent2D render_size, VkExtent2D upscale_size) {
     DestroyContext();
+    void* ctx = CreateContextHandle(render_size, upscale_size);
+    if (ctx == nullptr) {
+        return false;
+    }
+    context = ctx;
+    render_extent = render_size;
+    upscale_extent = upscale_size;
+    return true;
+}
+
+void* Fsr4Upscaler::CreateContextHandle(VkExtent2D render_size, VkExtent2D upscale_size) const {
+    const auto start = std::chrono::steady_clock::now();
     ffxCreateBackendVKDesc backend{};
     backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
     backend.header.pNext = nullptr;
@@ -289,11 +309,12 @@ bool Fsr4Upscaler::CreateContext(VkExtent2D render_size, VkExtent2D upscale_size
         LOG_ERROR(Render_Vulkan, "FSR 4: ffxCreateContext {}x{} -> {}x{} failed ({}); using FSR 3.1",
                   render_size.width, render_size.height, upscale_size.width, upscale_size.height,
                   result);
-        return false;
+        return nullptr;
     }
-    context = ctx;
-    render_extent = render_size;
-    upscale_extent = upscale_size;
+    LOG_INFO(Render_Vulkan, "FSR 4: context built in {} ms",
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - start)
+                 .count());
 #if defined(__linux__) && !defined(__ANDROID__)
     LOG_INFO(Render_Vulkan, "FSR 4: fsr4-vk {} context {}x{} -> {}x{}", provider_name,
              render_size.width, render_size.height, upscale_size.width, upscale_size.height);
@@ -301,7 +322,7 @@ bool Fsr4Upscaler::CreateContext(VkExtent2D render_size, VkExtent2D upscale_size
     LOG_INFO(Render_Vulkan, "FSR 4: AMD FSR {} context {}x{} -> {}x{}", provider_name,
              render_size.width, render_size.height, upscale_size.width, upscale_size.height);
 #endif
-    return true;
+    return ctx;
 }
 
 void Fsr4Upscaler::CreateExposure() {
@@ -391,10 +412,36 @@ bool Fsr4Upscaler::Upscale(const Inputs& in) {
                              in.upscale_size.width != upscale_extent.width ||
                              in.upscale_size.height != upscale_extent.height;
     if (new_context) {
-        if (!CreateContext(in.render_size, in.upscale_size)) {
+        const auto same = [](VkExtent2D a, VkExtent2D b) {
+            return a.width == b.width && a.height == b.height;
+        };
+        if (!pending_context.valid()) {
+            pending_render = in.render_size;
+            pending_upscale = in.upscale_size;
+            pending_context = std::async(std::launch::async, [this, render = in.render_size,
+                                                              upscale = in.upscale_size] {
+                return CreateContextHandle(render, upscale);
+            });
+            return false; // FSR 3.1 draws while it builds
+        }
+        if (pending_context.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return false;
+        }
+        void* ctx = pending_context.get();
+        if (ctx == nullptr) {
             failed = true;
             return false;
         }
+        if (!same(pending_render, in.render_size) || !same(pending_upscale, in.upscale_size)) {
+            // The sizes changed while it built: throw it away and build the right one.
+            ffxContext handle = ctx;
+            api->destroy_context(&handle, nullptr);
+            return false;
+        }
+        DestroyContext();
+        context = ctx;
+        render_extent = in.render_size;
+        upscale_extent = in.upscale_size;
         CreateOutput(in.upscale_size);
     }
 

@@ -11,6 +11,7 @@ on:
     branches: [prueba]
     paths:
       - .github/workflows/fsr4-vk.yml
+      - tools/lichii-arc/fsr4-vk/**
 
 permissions:
   contents: write
@@ -24,6 +25,11 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: lichii
+          sparse-checkout: tools/lichii-arc/fsr4-vk
+
       - name: Tools
         run: |
           sudo apt-get update
@@ -41,6 +47,9 @@ jobs:
           git fetch --depth 1 origin "$FSR4_VK_COMMIT"
           git checkout FETCH_HEAD
           git submodule update --init --recursive --depth 1 || git submodule update --init --recursive
+
+      - name: Lichii patch (eager pipelines + pipeline cache file)
+        run: python3 lichii/tools/lichii-arc/fsr4-vk/patch_pipelines.py fsr4-vk
 
       - name: AMD SDK DLL
         run: |

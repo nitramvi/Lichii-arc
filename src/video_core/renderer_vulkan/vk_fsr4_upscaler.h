@@ -10,6 +10,7 @@
 
 #include <array>
 #include <atomic>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -79,6 +80,9 @@ public:
 
 private:
     bool CreateContext(VkExtent2D render_size, VkExtent2D upscale_size);
+    /// Creates an ffxContext without touching the members (safe on a worker thread); nullptr on
+    /// failure.
+    void* CreateContextHandle(VkExtent2D render_size, VkExtent2D upscale_size) const;
     void DestroyContext();
     void CreateOutput(VkExtent2D upscale_size);
     void CreateExposure();
@@ -96,6 +100,11 @@ private:
     vk::ImageView output_view;
     vk::Image exposure_image; ///< 1x1 R32F holding 1 (the input is tonemapped, unit exposure)
     std::atomic<bool> failed{};
+    /// lichii-arc: the context (and fsr4-vk's network pipelines) is built on a worker thread so the
+    /// first FSR 4 frame doesn't freeze the game for seconds; FSR 3.1 draws until it's ready.
+    std::future<void*> pending_context;
+    VkExtent2D pending_render{};
+    VkExtent2D pending_upscale{};
 };
 
 } // namespace Vulkan

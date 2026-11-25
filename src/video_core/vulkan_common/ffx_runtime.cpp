@@ -174,6 +174,9 @@ std::shared_ptr<const Api> Acquire() {
     }
     if (WindowsPortRequested()) {
         const std::filesystem::path port = Folder() / WINDOWS_PORT_LIBRARY;
+        // fsr4-vk (lichii build) keeps its network pipelines in this file between sessions.
+        const std::filesystem::path pipeline_cache = Folder() / "fsr4-vk.pipelinecache";
+        _wputenv_s(L"FSR4_VK_PIPELINE_CACHE", pipeline_cache.wstring().c_str());
         const HMODULE module = LoadLibraryExW(port.wstring().c_str(), nullptr,
                                               LOAD_WITH_ALTERED_SEARCH_PATH);
         if (!module) {
