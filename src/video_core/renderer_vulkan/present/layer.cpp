@@ -3,6 +3,7 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <variant>
 #include "video_core/present.h"
 #include "video_core/renderer_vulkan/present/anti_alias_pass.h"
@@ -166,7 +167,22 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
         .height = scaled_height,
     };
 
-    if (!already_upscaled && !hdr_output) {
+    // Lichii-arc: LICHII_PRESENT_SKIP_1TO1=1 skips the present's FSR/SGSR/FSR 3 pass when the
+    // image is already at (or above) the size it is shown at: EASU at 1:1 only costs GPU time
+    // (Ocarina with FSR 4 / XeSS, 1080p into a 1080p rectangle: ~0.7 ms a frame on the Claw).
+    // The window pass (bilinear for these filters) then shows it 1:1. Off by default.
+    static const bool skip_one_to_one = [] {
+        const char* value = std::getenv("LICHII_PRESENT_SKIP_1TO1");
+        return value && value[0] == '1';
+    }();
+    const bool sr_not_needed =
+        skip_one_to_one &&
+        (crop_rect.right - crop_rect.left) * static_cast<f32>(render_extent.width) + 0.5f >=
+            static_cast<f32>(layout.screen.GetWidth()) &&
+        (crop_rect.bottom - crop_rect.top) * static_cast<f32>(render_extent.height) + 0.5f >=
+            static_cast<f32>(layout.screen.GetHeight());
+
+    if (!already_upscaled && !hdr_output && !sr_not_needed) {
         if (auto* fsr = std::get_if<FSR>(&sr_filter)) {
             source_image_view = fsr->Draw(device, scheduler, image_index, source_image, source_image_view, render_extent, crop_rect);
             crop_rect = {0, 0, 1, 1};

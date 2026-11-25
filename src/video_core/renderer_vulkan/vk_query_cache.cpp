@@ -3,6 +3,7 @@
 
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
 #include <chrono>
 #include <cstddef>
 #include <limits>
@@ -316,8 +317,15 @@ public:
         // AMD's drivers wait on each query of a WAIT_BIT copy separately (3.8 us per query, ~5 ms
         // a frame in Ocarina). Queries complete in order on the queue, so waiting for the newest
         // one is enough before copying the range without the wait.
-        const bool wait_on_last =
-            driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
+        // Lichii-arc: LICHII_QUERY_WAIT_LAST=1 uses the same single wait on every driver (Intel
+        // Arc: the query copies are ~1.6 ms of GPU a frame in Ocarina on the Claw). Off by default.
+        static const bool wait_last_everywhere = [] {
+            const char* value = std::getenv("LICHII_QUERY_WAIT_LAST");
+            return value && value[0] == '1';
+        }();
+        const bool wait_on_last = wait_last_everywhere ||
+                                  driver_id == VK_DRIVER_ID_AMD_PROPRIETARY ||
+                                  driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
 
         ApplyBanksWideOp<true>(pending_sync, [&](SamplesQueryBank* bank, size_t start,
                                                  size_t amount) {
