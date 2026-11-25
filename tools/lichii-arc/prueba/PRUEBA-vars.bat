@@ -55,6 +55,14 @@ REM    la telarana del Arbol Deku ya no pierden las fracciones de cada cuadro (a
 REM    77 %% de la velocidad real; a 23-27 fps tambien se atrasa). De conongnang/Lichii 647d88045
 REM    (Longshot). No cambia fps. 0 = como antes.
 set "LICHII_OOT_FRAME_CARRY=1"
+REM 19) (25/11) Menos trabajo de GPU por cuadro (OoT en la Claw esta limitado por la GPU, ~38 ms):
+REM    LICHII_QUERY_WAIT_LAST=1: al copiar los resultados de las consultas de oclusion se espera solo
+REM    la ultima de cada tanda y no cada una (como ya se hacia en AMD; ~1,6 ms por cuadro en la traza).
+REM    LICHII_PRESENT_SKIP_1TO1=1: si la imagen ya llega del tamano de la pantalla (FSR 4/XeSS a 1080p),
+REM    no se pasa otra vez por el FSR 1 del present (~0,7 ms; pierde solo el afilado extra del present).
+REM    0 = como antes. Si aparecen objetos que parpadean o desaparecen: LICHII_QUERY_WAIT_LAST=0.
+set "LICHII_QUERY_WAIT_LAST=1"
+set "LICHII_PRESENT_SKIP_1TO1=1"
 REM 11) (23/11) Generacion de cuadros LSFG x2 (Lossless Scaling, la misma del bat de 60 fps): el
 REM    juego corre a lo que da y se ven el doble de cuadros. Solo en la config de esta sesion: el bat
 REM    principal la vuelve a apagar cuando lo abris.

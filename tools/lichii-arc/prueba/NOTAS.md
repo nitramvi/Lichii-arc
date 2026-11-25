@@ -2,6 +2,25 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
+## Esta versión (25/11, madrugada)
+
+**Objetivo: menos GPU por cuadro en OoT** (la traza del 24/11 mostró que en la Claw OoT está limitado por la GPU, ~38 ms por cuadro) **+ upstream al día.** Sigue todo lo anterior (preset `calidad` con FSR 4, LSFG x2, HOT_PAGES, GUEST_FAST, image reaper, TC_NO_GPU_WAIT, BOOT_DRIVER_THREADS, OOT_FRAME_CARRY).
+
+Nuevo nuestro (apagado salvo en PRUEBA-vars.bat, ítem 19):
+- `LICHII_QUERY_WAIT_LAST=1`: al copiar los resultados de las consultas de oclusión, la GPU espera solo la última de cada tanda (las consultas terminan en orden) en vez de esperar una por una. Upstream ya lo hacía solo en AMD (~5 ms por cuadro allá); en la traza de la Claw ese sitio pesa ~1,6 ms.
+- `LICHII_PRESENT_SKIP_1TO1=1`: si la imagen ya llega del tamaño con que se muestra (OoT con FSR 4/XeSS sale a 1080p), no se pasa otra vez por el FSR 1 del present (EASU a 1:1 + afilado, ~0,7 ms). Se muestra 1:1 con bilineal. Solo se pierde el afilado extra del present.
+
+Nuevo de upstream (nx2 al 25/11 03:12 UTC):
+- #2466: la GPU recibe el trabajo grabado antes cuando se queda sin nada que hacer (MKW: −5 % de tiempo por cuadro). Puede ayudar en OoT, que está limitado por la GPU.
+- #2483: las páginas que escribió la GPU y hay que leer de vuelta se juntan en una sola copia.
+- #2566: versión oficial de nuestro arreglo de la marca de efectos de OoT con FSR (reemplaza la nuestra, mismo efecto).
+- #2539 (geometría tras un submit a mitad de dibujo), #2482 (bloom de MKW), #2551 (opción de mantener el tamaño de la ventana), #2555, #2549, #2542; #2484 entró y se revirtió (#2568).
+
+Qué probar (con PRUEBA.bat, se actualiza solo):
+1. OoT en Kokiri y campo de Hyrule, a batería: "game FPS" contra la versión anterior (antes 24–27).
+2. Que no haya objetos que parpadeen o desaparezcan (si pasa: `LICHII_QUERY_WAIT_LAST=0`), ni imagen más blanda que antes (si molesta: `LICHII_PRESENT_SKIP_1TO1=0`).
+3. Otro juego para descartar regresiones.
+
 ## Esta versión (24/11, tarde)
 
 **Objetivo: upstream al día + arreglos de OoT de conongnang/Lichii.** Sigue todo lo anterior (presets `calidad`/`rapido`/`consola`/`dibujo`, FSR 4 con reintento del backend, LSFG x2, HOT_PAGES, GUEST_FAST, image reaper, TC_NO_GPU_WAIT).
