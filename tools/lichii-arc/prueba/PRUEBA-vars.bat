@@ -105,6 +105,12 @@ REM      ~2 ms de convertirla en la GPU: muchos mas tirones. No volver a prender
 set "LICHII_ASTC_DISK_CACHE=0"
 REM 21) (25/11) DIAGNOSTICO: copias de buferes de la GPU por origen, cada 10 s en el log (LICHII_BUF_COPIES).
 set "LICHII_BUF_COPY_STATS=1"
+REM 22) (25/11) HISTORIAL DE LOGS: antes de cada arranque guarda el log de la sesion anterior en
+REM      user\log\historial (se quedan los ultimos 15), para poder comparar sesiones viejas.
+if exist "user\log\eden_log.txt" (
+  if not exist "user\log\historial" mkdir "user\log\historial"
+  powershell -NoProfile -Command "$s='user\log\eden_log.txt'; $d='user\log\historial'; $t=(Get-Item $s).LastWriteTime.ToString('yyyy-MM-dd_HH-mm'); Copy-Item $s (Join-Path $d ('eden_log_'+$t+'.txt')) -Force; Get-ChildItem $d -Filter 'eden_log_*.txt' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 15 | Remove-Item -Force"
+)
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)
