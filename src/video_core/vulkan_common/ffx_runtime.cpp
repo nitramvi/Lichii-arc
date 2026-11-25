@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 #include <mutex>
 #include <system_error>
 
@@ -167,6 +169,18 @@ bool FilesVerified() {
 
 } // Anonymous namespace
 
+void Prewarm() {
+    // Loads fsr4-vk.dll on a worker thread when the renderer starts, so the first FSR 4 frame
+    // doesn't pay for it; the reference keeps it loaded for the session.
+    if (!WindowsPortRequested()) {
+        return;
+    }
+    std::thread([] {
+        static std::shared_ptr<const Api> keep = Acquire();
+        (void)keep;
+    }).detach();
+}
+
 std::shared_ptr<const Api> Acquire() {
     std::scoped_lock lock{mutex};
     if (auto existing = current.lock()) {
@@ -176,9 +190,15 @@ std::shared_ptr<const Api> Acquire() {
         const std::filesystem::path port = Folder() / WINDOWS_PORT_LIBRARY;
         // fsr4-vk (lichii build) keeps its network pipelines in this file between sessions.
         const std::filesystem::path pipeline_cache = Folder() / "fsr4-vk.pipelinecache";
-        _wputenv_s(L"FSR4_VK_PIPELINE_CACHE", pipeline_cache.wstring().c_str());
+        // The OS environment block (the mingw-built DLL doesn't share this CRT's environment).
+        SetEnvironmentVariableW(L"FSR4_VK_PIPELINE_CACHE", pipeline_cache.wstring().c_str());
+        const auto load_start = std::chrono::steady_clock::now();
         const HMODULE module = LoadLibraryExW(port.wstring().c_str(), nullptr,
                                               LOAD_WITH_ALTERED_SEARCH_PATH);
+        LOG_INFO(Render_Vulkan, "FSR 4: loading fsr4-vk.dll took {} ms",
+                 std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - load_start)
+                     .count());
         if (!module) {
             LOG_WARNING(Render_Vulkan, "FSR 4: {} doesn't load (error {}); using FSR 3.1",
                         Common::FS::PathToUTF8String(port), GetLastError());
@@ -279,6 +299,8 @@ std::weak_ptr<const Loaded> current;
 
 } // Anonymous namespace
 
+void Prewarm() {}
+
 std::shared_ptr<const Api> Acquire() {
     std::scoped_lock lock{mutex};
     if (auto existing = current.lock()) {
@@ -322,6 +344,8 @@ std::shared_ptr<const Api> Acquire() {
 }
 
 #else
+
+void Prewarm() {}
 
 std::shared_ptr<const Api> Acquire() {
     return nullptr;

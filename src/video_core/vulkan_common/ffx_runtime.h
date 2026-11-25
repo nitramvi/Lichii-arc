@@ -33,5 +33,7 @@ struct Api {
 /// isn't there or doesn't load; null on other systems. The runtime stays loaded while a returned
 /// pointer lives.
 [[nodiscard]] std::shared_ptr<const Api> Acquire();
+/// lichii-arc: loads the Windows FSR 4 port on a worker thread ahead of the first FSR 4 frame.
+void Prewarm();
 
 } // namespace Vulkan::FfxRuntime

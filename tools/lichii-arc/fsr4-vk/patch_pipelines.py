@@ -30,8 +30,17 @@ VkPipelineCache lichii_cache = VK_NULL_HANDLE;
 VkDevice lichii_cache_device = VK_NULL_HANDLE;
 
 std::filesystem::path LichiiCachePath() {
+#ifdef _WIN32
+    // The host sets it in the OS environment block; this DLL's CRT copied its environment when it
+    // started, so std::getenv wouldn't see it.
+    wchar_t buffer[1024];
+    const DWORD length = GetEnvironmentVariableW(L"FSR4_VK_PIPELINE_CACHE", buffer, 1024);
+    return length > 0 && length < 1024 ? std::filesystem::path{std::wstring{buffer, length}}
+                                       : std::filesystem::path{};
+#else
     const char* value = std::getenv("FSR4_VK_PIPELINE_CACHE");
     return value && value[0] ? std::filesystem::path{value} : std::filesystem::path{};
+#endif
 }
 
 VkPipelineCache LichiiCache(VkDevice device) {
@@ -94,7 +103,7 @@ void LichiiSaveCache(VkDevice device) {
 # Helpers right before the first QualityContext member definition.
 anchor = "QualityContext::QualityContext(VkPhysicalDevice physical_device_,"
 sub(anchor, helpers + "\n" + anchor)
-src = ("#include <cstdlib>\n#include <filesystem>\n#include <fstream>\n#include <iterator>\n"
+src = ("#ifdef _WIN32\n#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n#include <windows.h>\n#endif\n#include <cstdlib>\n#include <filesystem>\n#include <fstream>\n#include <iterator>\n"
        "#include <mutex>\n#include <vector>\n") + src
 
 sub("vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);",

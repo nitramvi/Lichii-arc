@@ -230,7 +230,12 @@ Fsr4Upscaler::Fsr4Upscaler(const Device& device_, Scheduler& scheduler_,
                            MemoryAllocator& memory_allocator_)
     : device{device_}, scheduler{scheduler_}, memory_allocator{memory_allocator_},
       api{FfxRuntime::Acquire()} {
+    const auto start = std::chrono::steady_clock::now();
     const auto provider = api ? FindFsr4(*api, device) : std::nullopt;
+    LOG_INFO(Render_Vulkan, "FSR 4: provider query took {} ms",
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - start)
+                 .count());
     if (!provider) {
         throw vk::Exception(VK_ERROR_FEATURE_NOT_PRESENT);
     }
