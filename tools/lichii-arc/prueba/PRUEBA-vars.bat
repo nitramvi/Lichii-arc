@@ -97,6 +97,10 @@ set "PRUEBA_RES_DEF=true"
 if /i "%LICHII_OOT_RES%"=="075" set "PRUEBA_RES=2"
 if /i "%LICHII_OOT_RES%"=="075" set "PRUEBA_RES_DEF=false"
 powershell -NoProfile -Command "$f='user\config\qt-config.ini'; (Get-Content $f) -replace '^resolution_setup\\default=.*','resolution_setup\default=%PRUEBA_RES_DEF%' -replace '^resolution_setup=.*','resolution_setup=%PRUEBA_RES%' | Set-Content $f"
+REM 20) (25/11) CACHE DE TEXTURAS ASTC EN DISCO: la Arc 140V no tiene ASTC y convierte cada textura nueva
+REM      en la GPU. Al entrar a una zona/escena nueva (25/11: 240 texturas, congelon de varios segundos)
+REM      se guardan ya convertidas; la proxima vez se copian del disco. Hasta 2 GB en user\.
+set "LICHII_ASTC_DISK_CACHE=1"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)
