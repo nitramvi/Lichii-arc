@@ -3,6 +3,10 @@
 
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string>
+#include <chrono>
+#include <unordered_map>
+#include <mutex>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -650,11 +654,74 @@ bool BufferCacheRuntime::CanReorderUpload(const Buffer& buffer,
     return can_use_upload_cmdbuf;
 }
 
+namespace {
+// lichii-arc (LICHII_BUF_COPY_STATS=1): GPU buffer copies per caller line, logged every 10 s as
+// LICHII_BUF_COPIES, to find which copies make up the buffer-copy time of the GPU frame.
+struct BufCopyStats {
+    std::mutex mutex;
+    std::unordered_map<u32, std::pair<u64, u64>> by_line; // line -> {bytes, calls}
+    std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
+};
+
+bool BufCopyStatsEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_BUF_COPY_STATS");
+        return value && value[0] == '1';
+    }();
+    return enabled;
+}
+
+void NoteBufCopy(std::source_location location, bool stream,
+                 std::span<const VideoCommon::BufferCopy> copies) {
+    static BufCopyStats stats;
+    u64 bytes = 0;
+    for (const auto& copy : copies) {
+        bytes += copy.size;
+    }
+    std::scoped_lock lock{stats.mutex};
+    auto& entry = stats.by_line[location.line() | (stream ? 0x80000000u : 0u)];
+    entry.first += bytes;
+    entry.second += 1;
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - stats.window_start).count();
+    if (seconds < 10.0) {
+        return;
+    }
+    std::vector<std::pair<u32, std::pair<u64, u64>>> rows(stats.by_line.begin(),
+                                                          stats.by_line.end());
+    std::ranges::sort(rows, std::greater<>{},
+                      [](const auto& row) { return row.second.first; });
+    u64 total_bytes = 0;
+    u64 total_calls = 0;
+    std::string top;
+    for (const auto& [key, value] : rows) {
+        total_bytes += value.first;
+        total_calls += value.second;
+    }
+    for (size_t i = 0; i < rows.size() && i < 8; ++i) {
+        const auto& [key, value] = rows[i];
+        top += fmt::format(" {}{}:{:.1f}MB/{}", (key & 0x80000000u) ? "up" : "dev",
+                           key & 0x7fffffffu, static_cast<double>(value.first) / 1048576.0 / seconds,
+                           value.second / static_cast<u64>(seconds));
+    }
+    LOG_INFO(Render_Vulkan,
+             "LICHII_BUF_COPIES window_s={:.1f} total={:.1f}MB/s calls={}/s (per second; "
+             "up=from the upload stream, dev=buffer to buffer; number = buffer_cache.h line){}",
+             seconds, static_cast<double>(total_bytes) / 1048576.0 / seconds,
+             total_calls / static_cast<u64>(seconds), top);
+    stats.by_line.clear();
+    stats.window_start = now;
+}
+} // Anonymous namespace
+
 void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
                                     std::span<const VideoCommon::BufferCopy> copies, bool barrier,
-                                    bool can_reorder_upload) {
+                                    bool can_reorder_upload, std::source_location location) {
     if (dst_buffer == VK_NULL_HANDLE || src_buffer == VK_NULL_HANDLE) {
         return;
+    }
+    if (BufCopyStatsEnabled()) {
+        NoteBufCopy(location, src_buffer == UploadPool().StreamBuf(), copies);
     }
     // Measuring a popular game, this number never exceeds the specified size once data is warmed up
     boost::container::small_vector<VkBufferCopy, 8> vk_copies(copies.size());

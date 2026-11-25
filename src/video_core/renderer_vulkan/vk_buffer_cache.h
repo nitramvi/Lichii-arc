@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <source_location>
+
 #include <deque>
 #include <limits>
 
@@ -208,7 +210,8 @@ public:
 
     void CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
                     std::span<const VideoCommon::BufferCopy> copies, bool barrier,
-                    bool can_reorder_upload = false);
+                    bool can_reorder_upload = false,
+                    std::source_location location = std::source_location::current());
 
     void PostCopyBarrier();
 
