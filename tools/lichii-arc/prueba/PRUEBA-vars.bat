@@ -116,6 +116,10 @@ REM      fraccion del destino del juego (0.833 = 1600x900 en vez de 1920x1080) y
 REM      escritura lo estira con bilineal. FSR 4 cuesta ~7 ms por cuadro a 1080p en la Claw y
 REM      baja con los pixeles de salida (~30 %% menos a 1600x900). Si se ve muy blando: 0 (apagado).
 set "LICHII_OOT_UPSCALE_OUT=0.833"
+REM 25) (25/11) TEXTURAS ASTC EN SEGUNDO PLANO: en vez de convertirlas en la GPU en el cuadro que las usa
+REM      (congelones al entrar por primera vez a una zona), se decodifican en hilos del procesador y aparecen
+REM      unos cuadros despues. Para volver al modo anterior: 0.
+set "LICHII_ASTC_ASYNC=1"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)

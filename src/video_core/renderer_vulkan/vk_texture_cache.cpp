@@ -61,6 +61,21 @@
 
 namespace Vulkan {
 
+namespace {
+// lichii-arc (LICHII_ASTC_ASYNC=1): decode ASTC on CPU worker threads in the background instead of
+// the GPU in the frame that first uses the texture, so entering a new area doesn't freeze the game
+// while the GPU converts hundreds of textures (the texture shows up a few frames later).
+Settings::AstcDecodeMode LichiiAstcDecodeMode() {
+    static const bool async = [] {
+        const char* value = std::getenv("LICHII_ASTC_ASYNC");
+        return value && value[0] == '1';
+    }();
+    return async ? Settings::AstcDecodeMode::CpuAsynchronous
+                 : Settings::values.accelerate_astc.GetValue();
+}
+} // Anonymous namespace
+
+
 using Tegra::Engines::Fermi2D;
 using Tegra::Texture::SwizzleSource;
 using Tegra::Texture::TextureMipmapFilter;
@@ -240,7 +255,7 @@ constexpr VkBorderColor ConvertBorderColor(const std::array<float, 4>& color) {
 [[nodiscard]] bool IsUnevenMipRgba8Astc(const Device& device, const ImageInfo& info) {
     if (!IsPixelFormatASTC(info.format) || device.IsOptimalAstcSupported() ||
         info.type != ImageType::e2D || info.size.depth != 1 || info.resources.levels <= 1 ||
-        Settings::values.accelerate_astc.GetValue() != Settings::AstcDecodeMode::Gpu ||
+        LichiiAstcDecodeMode() != Settings::AstcDecodeMode::Gpu ||
         Settings::GetAstcRecompression() == Settings::AstcRecompression::Uncompressed) {
         return false;
     }
@@ -420,7 +435,7 @@ constexpr u64 MaxFreeTranscodeBytes = u64{256} << 20;
         info.type != ImageType::e2D || info.size.depth != 1) {
         return false;
     }
-    return Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu &&
+    return LichiiAstcDecodeMode() == Settings::AstcDecodeMode::Gpu &&
            Settings::GetAstcRecompression() != Settings::AstcRecompression::Uncompressed;
 }
 
@@ -431,7 +446,7 @@ constexpr u64 MaxFreeTranscodeBytes = u64{256} << 20;
     if (IsHugeAstcArray(device, info) || IsUnevenMipRgba8Astc(device, info)) {
         return true;
     }
-    if (Settings::values.accelerate_astc.GetValue() != Settings::AstcDecodeMode::Gpu) {
+    if (LichiiAstcDecodeMode() != Settings::AstcDecodeMode::Gpu) {
         return false;
     }
     return Settings::GetAstcRecompression() == Settings::AstcRecompression::Uncompressed &&
@@ -1349,7 +1364,7 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, Scheduler& sched
     // Before anything below reads astc_recompression (passes, view formats).
     UseBc3ForSwitch2OnSmallCards(device);
     // Huge ASTC arrays always decode on the GPU (IsHugeAstcArray), whatever the decode setting.
-    if (Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu ||
+    if (LichiiAstcDecodeMode() == Settings::AstcDecodeMode::Gpu ||
         !device.IsOptimalAstcSupported()) {
         astc_decoder_pass.emplace(device, scheduler, descriptor_pool, staging_buffer_pool,
                                   compute_pass_descriptor_queue, memory_allocator);
@@ -3342,7 +3357,7 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
         flags |= VideoCommon::ImageFlagBits::Converted;
         flags |= VideoCommon::ImageFlagBits::CostlyLoad;
     } else if (IsPixelFormatASTC(info.format) && !runtime->device.IsOptimalAstcSupported()) {
-        switch (Settings::values.accelerate_astc.GetValue()) {
+        switch (LichiiAstcDecodeMode()) {
         case Settings::AstcDecodeMode::Gpu:
             if (WillUseAcceleratedAstcDecode(runtime->device, info) ||
                 WillUseGpuBcnTranscode(runtime->device, info)) {
