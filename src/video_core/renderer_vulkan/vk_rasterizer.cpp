@@ -643,6 +643,11 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
         [this](const std::function<void(DAddr, size_t)>& callback) {
             gpu.ForEachPendingCpuWrite(callback);
         });
+    buffer_cache.SetReadRunPageFilter([this](DAddr addr, u64 size) {
+        return !texture_cache.page_filter.Any(addr, size) &&
+               !query_cache.page_filter.Any(addr, size) &&
+               !buffer_cache_runtime.Nx2Slots().HasOwed();
+    });
     VideoCommon::GpuSplit::Get().SetIdleHook(
         [](void* argument) {
             auto* const rasterizer = static_cast<RasterizerVulkan*>(argument);
@@ -1657,15 +1662,27 @@ void RasterizerVulkan::NoteOcarinaDraw(const GraphicsPipeline& pipeline) {
                 scene.size.width == oot_motion.extent.width &&
                 scene.size.height == oot_motion.extent.height && !scene.IsRescaled() &&
                 scene.range == VideoCommon::SubresourceRange{}) {
-                oot_effects_scene = scene.Handle(Shader::TextureType::Color2D);
                 oot_effects_view = scene_id;
                 oot_effects_generation = texture_cache.ImageViewGeneration(scene_id);
                 oot_effects_address = scene.gpu_addr;
                 oot_effects_frame = render_trace_frame;
-                oot_live_dlss->SaveEffectsBase(oot_effects_scene, oot_motion.extent,
-                                               render_trace_frame);
+                oot_live_dlss->SaveEffectsBase(scene.Handle(Shader::TextureType::Color2D),
+                                               oot_motion.extent, render_trace_frame);
             }
         }
+    }
+}
+
+void RasterizerVulkan::MarkOcarinaEffectsIfAlive() {
+    if (const auto* scene =
+            texture_cache.GetImageViewIfCurrent(oot_effects_view, oot_effects_generation)) {
+        oot_live_dlss->MarkEffects(scene->Handle(Shader::TextureType::Color2D), render_trace_frame);
+    } else if (oot_effects_stale_warnings < 8) {
+        ++oot_effects_stale_warnings;
+        LOG_WARNING(Render_Vulkan,
+                    "OoT effects mark skipped: scene view at {:#x} was retired since the fog "
+                    "draw ({} so far)",
+                    oot_effects_address, oot_effects_stale_warnings);
     }
 }
 
@@ -6314,8 +6331,14 @@ void RasterizerVulkan::FlushWork(bool ends_pass) {
         pass_boundary = ends_pass || scheduler.IsBetweenRenderPasses() ||
                         (texture_cache.RenderTargetsDirty() && scheduler.IsRenderPassActive());
     }
-    switch (SubmissionPolicy::Advance(draw_counter, native, android, budget, legacy_budget,
-                                      pass_boundary)) {
+    auto action = SubmissionPolicy::Advance(draw_counter, native, android, budget, legacy_budget,
+                                            pass_boundary);
+    if (action != SubmissionPolicy::Action::Flush && native && !android &&
+        scheduler.IdleGpuAwaitsWork()) {
+        draw_counter = 0;
+        action = SubmissionPolicy::Action::Flush;
+    }
+    switch (action) {
     case SubmissionPolicy::Action::None:
         break;
     case SubmissionPolicy::Action::Dispatch:
@@ -7440,21 +7463,6 @@ void RasterizerVulkan::ReleaseChannel(s32 channel_id) {
     }
     pipeline_cache.EraseChannel(channel_id);
     query_cache.EraseChannel(channel_id);
-}
-
-void RasterizerVulkan::MarkOcarinaEffectsIfAlive() {
-    // oot_effects_scene is a raw view handle taken at the fog draw. A scene image deleted since
-    // (unmap, join, relocation) and made again at the same address passes the address test, but
-    // the saved view is destroyed once the GPU passes the delete: after a submit in between, the
-    // mark would sample freed memory. Port of conongnang/Lichii 6c003b9ce (Fritchii bbcfe6f90d).
-    if (texture_cache.ImageViewGeneration(oot_effects_view) == oot_effects_generation) {
-        oot_live_dlss->MarkEffects(oot_effects_scene, render_trace_frame);
-    } else if (oot_effects_stale++ < 8) {
-        LOG_WARNING(Render_Vulkan,
-                    "OoT effects mark skipped, the scene view at {:#x} was destroyed since the fog "
-                    "draw ({} so far)",
-                    oot_effects_address, oot_effects_stale);
-    }
 }
 
 } // namespace Vulkan

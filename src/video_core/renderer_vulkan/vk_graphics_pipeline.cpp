@@ -1694,6 +1694,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed, std::optional<PreparedBind
         scheduler.RequestOutsideRenderPassOperationContext();
     }
 
+    const u64 geometry_tick = scheduler.CurrentTick();
     {
         Profile::Scope scope{Profile::Zone::UpdateBuffers};
         const BufferArena::SideScope side;
@@ -1797,6 +1798,14 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed, std::optional<PreparedBind
     if (IsBuilt() && (!has_pipeline || build->Failed())) {
         return false;
     }
+    if (scheduler.CurrentTick() != geometry_tick) {
+        const BufferArena::SideScope side;
+        buffer_cache.BindHostGeometryBuffers(is_indexed);
+        if (buffer_cache.any_buffer_uploaded) {
+            buffer_cache.runtime.PostCopyBarrier();
+            buffer_cache.any_buffer_uploaded = false;
+        }
+    }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
     return ConfigureDraw(rescaling, render_area, deferred);
 }
@@ -1865,6 +1874,7 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed, std::optional<PreparedBin
             }
         }
     }
+    const u64 geometry_tick = scheduler.CurrentTick();
     {
         Profile::Scope scope{Profile::Zone::UpdateBuffers};
         const BufferArena::SideScope side;
@@ -1978,6 +1988,14 @@ bool GraphicsPipeline::ConfigureDelta(bool is_indexed, std::optional<PreparedBin
     }
     if (IsBuilt() && (!has_pipeline || build->Failed())) {
         return false;
+    }
+    if (scheduler.CurrentTick() != geometry_tick) {
+        const BufferArena::SideScope side;
+        buffer_cache.BindHostGeometryBuffers(is_indexed);
+        if (buffer_cache.any_buffer_uploaded) {
+            buffer_cache.runtime.PostCopyBarrier();
+            buffer_cache.any_buffer_uploaded = false;
+        }
     }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
     return ConfigureDraw(rescaling, render_area, deferred);

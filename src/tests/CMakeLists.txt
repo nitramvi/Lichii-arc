@@ -69,6 +69,7 @@ add_executable(tests
     video_core/vulkan_address_map.cpp
     video_core/texture_rect_descriptor.cpp
     video_core/join_whole_copy.cpp
+    video_core/mip_chain_overlap.cpp
     video_core/padded_square.cpp
     audio_core/batch_decoder.cpp
     audio_core/adpcm_decode.cpp
@@ -121,6 +122,7 @@ add_executable(tests
     video_core/native_texture_header_index.cpp
     video_core/texture_alias_ticks.cpp
     video_core/texture_cache_gob_layout.cpp
+    video_core/image_view_slots.cpp
     video_core/sampled_views.cpp
     video_core/texture_handles.cpp
     video_core/ampere_selevet_modes.cpp
@@ -246,6 +248,7 @@ add_executable(tests
     common/host_memory_failure.cpp
     common/host_memory_test_access.h
     core/host_memory_failure.cpp
+    common/library_exceptions.cpp
     common/memory_detect.cpp
     common/multi_level_page_table.cpp
     common/nextendo.cpp
