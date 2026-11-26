@@ -3914,6 +3914,57 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
         QueueAsyncDecode(image, image_id);
         return;
     }
+    if (True(image.flags & ImageFlagBits::AcceleratedUpload) &&
+        IsPixelFormatASTC(image.info.format) && image.dirty_layers.empty() &&
+        image.host_level_offset == 0) {
+        static const u32 astc_budget = [] {
+            const char* value = std::getenv("LICHII_ASTC_DEFER");
+            return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0u;
+        }();
+        if (astc_budget != 0) {
+            if (lichii_astc_frame != frame_tick) {
+                if (lichii_astc_frame != ~0ULL && lichii_astc_deferred != 0 &&
+                    frame_tick % 600 == 0) {
+                    LOG_INFO(HW_GPU, "LICHII_ASTC_DEFER {} decoded, {} pushed to a later frame",
+                             lichii_astc_done, lichii_astc_deferred);
+                    lichii_astc_done = 0;
+                    lichii_astc_deferred = 0;
+                }
+                lichii_astc_frame = frame_tick;
+                lichii_astc_this_frame = 0;
+            }
+            if (lichii_astc_this_frame >= astc_budget) {
+                // Over this frame's budget: keep it marked for upload so the next use (a later
+                // frame) decodes it, and show zero blocks (black/transparent) until then instead
+                // of whatever the memory held.
+                image.flags |= ImageFlagBits::CpuModified;
+                image.load_tick = previous_load_tick;
+                image.storage_written_levels = previous_storage_written_levels;
+                ++lichii_astc_deferred;
+                if (False(image.flags & ImageFlagBits::ZeroFilled)) {
+                    image.flags |= ImageFlagBits::ZeroFilled;
+                    std::vector<u8> zero_unswizzled(image.unswizzled_size_bytes, 0);
+                    Tegra::Memory::GpuGuestMemory<u8,
+                                                  Tegra::Memory::GuestMemoryFlags::UnsafeRead>
+                        zero_swizzle(*gpu_memory, image.gpu_addr, image.guest_size_bytes,
+                                     &swizzle_data_buffer);
+                    auto zero_copies = UnswizzleImage(*gpu_memory, image.gpu_addr, image.info,
+                                                      zero_swizzle, zero_unswizzled);
+                    ConvertedLayout(image.info, zero_copies);
+                    const size_t out_size = MapSizeBytes(image);
+                    auto staging = runtime.UploadStagingBuffer(out_size);
+                    std::memset(staging.mapped_span.data(), 0, out_size);
+                    image.UploadMemory(staging, zero_copies);
+                    runtime.InsertUploadMemoryBarrier();
+                } else {
+                    runtime.TransitionImageLayout(image);
+                }
+                return;
+            }
+            ++lichii_astc_this_frame;
+            ++lichii_astc_done;
+        }
+    }
 
     // OpenGL has no deferred upload staging and uploads the whole volume at once.
     if constexpr (requires { runtime.CurrentTick(); }) {

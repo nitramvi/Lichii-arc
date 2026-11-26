@@ -1032,6 +1032,12 @@ private:
 
     u64 modification_tick = 0;
     u64 frame_tick = 0;
+    // lichii-arc (LICHII_ASTC_DEFER=N): GPU ASTC decodes done this frame, and how many were pushed
+    // to later frames, so entering an area spreads its textures over frames instead of one.
+    u64 lichii_astc_frame = ~0ULL;
+    u32 lichii_astc_this_frame = 0;
+    u64 lichii_astc_deferred = 0;
+    u64 lichii_astc_done = 0;
 
     Common::ThreadWorker texture_decode_worker{1, "TextureDecoder", {},
                                                Common::ThreadPlacement::Efficiency};
