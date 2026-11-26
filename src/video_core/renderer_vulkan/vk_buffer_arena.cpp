@@ -302,8 +302,28 @@ void BufferArena::Exec(const OutsideBody& body, std::span<const u8>) {
     scheduler.RequestOutsideRenderPassOperationContext(body.location);
 }
 
+/// lichii-arc: LICHII_BUF_BATCH_PLAIN=1 sends in-order copies with barriers from staging or device
+/// buffers (CopyMode::Plain, barrier) through the scheduler's upload batch, like the stream
+/// uploads: consecutive copies with no hazard between them (UploadBatch::CanAdd) share one barrier
+/// before and one after instead of two each. The batch is recorded before any other command and
+/// before the submission, so the copies keep their order and their tick.
+static bool BatchPlainCopies() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("LICHII_BUF_BATCH_PLAIN");
+        const bool on = value != nullptr && value[0] == '1';
+        if (on) {
+            LOG_INFO(Render_Vulkan,
+                     "LICHII_BUF_BATCH_PLAIN=1: in-order buffer copies share the upload batch's "
+                     "barriers");
+        }
+        return on;
+    }();
+    return enabled;
+}
+
 void BufferArena::Exec(const CopyBody& body, std::span<const VkBufferCopy> span) {
-    if (body.mode == CopyMode::Batched) {
+    if (body.mode == CopyMode::Batched ||
+        (body.mode == CopyMode::Plain && body.barrier && !span.empty() && BatchPlainCopies())) {
         scheduler.RecordUpload(body.src, body.dst, span);
         return;
     }

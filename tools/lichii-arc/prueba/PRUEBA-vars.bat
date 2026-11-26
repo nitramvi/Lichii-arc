@@ -120,6 +120,11 @@ REM 25) (25/11) TEXTURAS ASTC EN SEGUNDO PLANO: en vez de convertirlas en la GPU
 REM      (congelones al entrar por primera vez a una zona), se decodifican en hilos del procesador y aparecen
 REM      unos cuadros despues. Para volver al modo anterior: 0.
 set "LICHII_ASTC_ASYNC=1"
+REM 26) (26/11) COPIAS DE BUFERES JUNTAS: las copias de buferes con barreras (desde buferes de staging o
+REM      de buferes de la GPU) se juntan en la misma tanda que las subidas: varias copias seguidas sin
+REM      conflicto comparten una barrera antes y una despues en vez de dos cada una (la traza del 24/11:
+REM      ~1,9 ms por cuadro en ese sitio). Si aparece algo roto (texturas, geometria): 0.
+set "LICHII_BUF_BATCH_PLAIN=1"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)

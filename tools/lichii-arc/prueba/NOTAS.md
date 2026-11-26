@@ -2,6 +2,25 @@
 
 Una sola rama y un solo release (`prueba-claw`). En la Claw: `PRUEBA.bat` + `lichii-prueba.exe`; el bat baja solo cada versión nueva.
 
+## Esta versión (26/11, madrugada)
+
+**Objetivo: menos esperas de la GPU por copias de búferes (todos los juegos, OoT en especial) + upstream al día.** Sigue todo lo anterior (preset `calidad` con FSR 4 construido en segundo plano, `LICHII_OOT_UPSCALE_OUT=0.833`, `LICHII_ASTC_ASYNC=1`, QUERY_WAIT_LAST, PRESENT_SKIP_1TO1, LSFG x2, etc.).
+
+Nuevo nuestro (apagado salvo en PRUEBA-vars.bat, ítem 26):
+- `LICHII_BUF_BATCH_PLAIN=1`: las copias de búferes con barreras que no vienen del búfer de subidas (staging dedicado o búfer a búfer de la GPU) entran en la misma tanda que las subidas (`UploadBatch`). Varias copias seguidas sin conflicto entre ellas comparten una barrera antes y una después, en vez de dos barreras cada una (cada barrera hace que la GPU termine todo lo anterior). La tanda se graba antes de cualquier otro comando y antes del envío: mismo orden y mismo tick. En la traza del 24/11 ese sitio (`vk_buffer_arena.cpp`, copia con barreras) pesaba ~1,9 ms por cuadro. En el log: `LICHII_BUF_BATCH_PLAIN=1: in-order buffer copies share the upload batch's barriers`.
+
+Nuevo de upstream (nx2 al 26/11 02:46 UTC):
+- #2609: el hilo de fences para sincronizado con su espera (evita un cuelgue/crash al cerrar o cambiar de juego).
+- #2608: el texture cache descarta vistas sin subrecurso que coincida (vistas inválidas, todos los juegos).
+- #2614: el traductor de shaders no vuelve a recorrer phis opacas (shaders que tardaban o colgaban la compilación).
+- #2605: shader warm no abre cada archivo suelto del RomFS (arranque más rápido con mods/RomFS sueltos).
+- #2591 (fuente compartida de respaldo), #2603, #2601, #2583 (CI).
+
+Qué probar (con PRUEBA.bat, se actualiza solo):
+1. OoT en Kokiri y campo de Hyrule, a batería: "game FPS" contra la versión anterior; mirar que no haya texturas, agua, pasto o geometría rotos (si los hay: `LICHII_BUF_BATCH_PLAIN=0` en el ítem 26).
+2. Otro juego cualquiera (por el ítem 26 y los arreglos de upstream).
+3. Si sacás una traza (`EDEN_DKB_FRAME_TRACE=1` + `EDEN_DKB_GPU_SITES=1`), el sitio de copias de `vk_buffer_arena.cpp` debería bajar; y el log trae `LICHII_BUF_COPIES` (cuántas copias por segundo y de dónde).
+
 ## Esta versión (25/11, tarde)
 
 **Objetivo: más fps en OoT bajando el costo de FSR 4 + upstream al día.** Sigue todo lo de la madrugada (QUERY_WAIT_LAST, PRESENT_SKIP_1TO1, preset `calidad` con FSR 4, LSFG x2, etc.).
