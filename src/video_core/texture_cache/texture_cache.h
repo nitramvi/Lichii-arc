@@ -3923,10 +3923,11 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
         }();
         if (astc_budget != 0) {
             if (lichii_astc_frame != frame_tick) {
-                if (lichii_astc_frame != ~0ULL && lichii_astc_deferred != 0 &&
-                    frame_tick % 600 == 0) {
-                    LOG_INFO(HW_GPU, "LICHII_ASTC_DEFER {} decoded, {} pushed to a later frame",
-                             lichii_astc_done, lichii_astc_deferred);
+                if (lichii_astc_frame != ~0ULL && lichii_astc_frame / 600 != frame_tick / 600 &&
+                    (lichii_astc_deferred != 0 || lichii_astc_done != 0)) {
+                    LOG_INFO(HW_GPU,
+                             "LICHII_ASTC_DEFER frames<{}: {} decoded, {} uses waited a frame",
+                             frame_tick, lichii_astc_done, lichii_astc_deferred);
                     lichii_astc_done = 0;
                     lichii_astc_deferred = 0;
                 }
@@ -3956,9 +3957,9 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
                     std::memset(staging.mapped_span.data(), 0, out_size);
                     image.UploadMemory(staging, zero_copies);
                     runtime.InsertUploadMemoryBarrier();
-                } else {
-                    runtime.TransitionImageLayout(image);
                 }
+                // Already zero-filled (and in its layout): nothing to record while it waits.
+                // Transitioning it again on every use cost GPU barriers each frame.
                 return;
             }
             ++lichii_astc_this_frame;
