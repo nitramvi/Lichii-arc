@@ -7,7 +7,6 @@
 // CheezerWheezer's FSR 4 integration for CheezyEmu.
 
 #include <chrono>
-#include <cstdlib>
 #include <future>
 #include <optional>
 #include <string>
@@ -421,48 +420,34 @@ bool Fsr4Upscaler::Upscale(const Inputs& in) {
         const auto same = [](VkExtent2D a, VkExtent2D b) {
             return a.width == b.width && a.height == b.height;
         };
-        static const bool async_build = [] {
-            const char* value = std::getenv("LICHII_FSR4_ASYNC");
-            return value && value[0] == '1';
-        }();
-        if (!async_build && !pending_context.valid()) {
-            // Default: build it here, as before 119 (with fsr4-vk's pipeline cache it takes
-            // ~0.5 s once the cache exists). LICHII_FSR4_ASYNC=1 builds it on a worker thread.
-            if (!CreateContext(in.render_size, in.upscale_size)) {
-                failed = true;
-                return false;
-            }
-            CreateOutput(in.upscale_size);
-        } else {
-            if (!pending_context.valid()) {
-                pending_render = in.render_size;
-                pending_upscale = in.upscale_size;
-                pending_context = std::async(std::launch::async, [this, render = in.render_size,
-                                                                  upscale = in.upscale_size] {
-                    return CreateContextHandle(render, upscale);
-                });
-                return false; // FSR 3.1 draws while it builds
-            }
-            if (pending_context.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-                return false;
-            }
-            void* ctx = pending_context.get();
-            if (ctx == nullptr) {
-                failed = true;
-                return false;
-            }
-            if (!same(pending_render, in.render_size) || !same(pending_upscale, in.upscale_size)) {
-                // The sizes changed while it built: throw it away and build the right one.
-                ffxContext handle = ctx;
-                api->destroy_context(&handle, nullptr);
-                return false;
-            }
-            DestroyContext();
-            context = ctx;
-            render_extent = in.render_size;
-            upscale_extent = in.upscale_size;
-            CreateOutput(in.upscale_size);
+        if (!pending_context.valid()) {
+            pending_render = in.render_size;
+            pending_upscale = in.upscale_size;
+            pending_context = std::async(std::launch::async, [this, render = in.render_size,
+                                                              upscale = in.upscale_size] {
+                return CreateContextHandle(render, upscale);
+            });
+            return false; // FSR 3.1 draws while it builds
         }
+        if (pending_context.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return false;
+        }
+        void* ctx = pending_context.get();
+        if (ctx == nullptr) {
+            failed = true;
+            return false;
+        }
+        if (!same(pending_render, in.render_size) || !same(pending_upscale, in.upscale_size)) {
+            // The sizes changed while it built: throw it away and build the right one.
+            ffxContext handle = ctx;
+            api->destroy_context(&handle, nullptr);
+            return false;
+        }
+        DestroyContext();
+        context = ctx;
+        render_extent = in.render_size;
+        upscale_extent = in.upscale_size;
+        CreateOutput(in.upscale_size);
     }
 
     ffxDispatchDescUpscale dispatch{};
