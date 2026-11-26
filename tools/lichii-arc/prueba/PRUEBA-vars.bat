@@ -119,7 +119,8 @@ set "LICHII_OOT_UPSCALE_OUT=0.833"
 REM 25) (25/11) TEXTURAS ASTC EN SEGUNDO PLANO: en vez de convertirlas en la GPU en el cuadro que las usa
 REM      (congelones al entrar por primera vez a una zona), se decodifican en hilos del procesador y aparecen
 REM      unos cuadros despues. Para volver al modo anterior: 0.
-set "LICHII_ASTC_ASYNC=1"
+REM      APAGADO el 26/11: en el bosque de dia quedaron texturas sin cargar (todo oscuro, como de noche).
+set "LICHII_ASTC_ASYNC=0"
 REM 26) (26/11) COPIAS DE BUFERES JUNTAS: las copias de buferes con barreras (desde buferes de staging o
 REM      de buferes de la GPU) se juntan en la misma tanda que las subidas: varias copias seguidas sin
 REM      conflicto comparten una barrera antes y una despues en vez de dos cada una (la traza del 24/11:
