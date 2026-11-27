@@ -129,7 +129,8 @@ set "LICHII_BUF_BATCH_PLAIN=1"
 REM 26) (26/11) TEXTURAS ASTC REPARTIDAS: se siguen convirtiendo en la GPU (rapido, sin texturas faltantes
 REM      por segundos), pero como mucho N por cuadro; las demas esperan al cuadro siguiente (negras unos
 REM      cuadros). Al entrar a una zona nueva, en vez de un congelon de 2-6 s. 0 = apagado.
-set "LICHII_ASTC_DEFER=4"
+REM      26/11: 2 por cuadro (pedido de Pedro: bajon mas suave al entrar a zonas nuevas).
+set "LICHII_ASTC_DEFER=2"
 REM 15) PRESETS DE OoT (24/11). Si LICHII_OOT_PRESET tiene valor, pisa escalador y escala de arriba:
 REM      calidad = FSR 4 a 1440x810 -> 1080p (el mas lindo; ~24-27 fps a bateria)
 REM      rapido  = FSR 4 a 960x540  -> 1080p (mas fps, FSR 4 disimula la baja resolucion)
